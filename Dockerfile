@@ -48,6 +48,7 @@ RUN apt-get update \
     && sed -i "s#^AR=.*#AR=$toolchain/bin/llvm-ar#" config.mak \
     && sed -i "s#^RANLIB=.*#RANLIB=$toolchain/bin/llvm-ranlib#" config.mak \
     && sed -i "s#^STRIP=.*#STRIP=$toolchain/bin/llvm-strip#" config.mak \
+    && sed -i "s#^GPAC_SH_FLAGS=.*#GPAC_SH_FLAGS=#" config.mak \
     && make -C src -j"$(nproc)" \
     && make -C applications/mp4box -j"$(nproc)" \
     && mkdir -p /opt/mp4box/bin \
