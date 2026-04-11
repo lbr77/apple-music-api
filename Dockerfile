@@ -14,7 +14,7 @@ RUN apt-get update \
 
 FROM debian:bookworm-slim AS mp4box
 
-ARG GPAC_DEB_URL="https://download.tsi.telecom-paristech.fr/gpac/new_builds/linux64/gpac/gpac_0.7.2-DEV-latest-master_amd64.deb"
+ARG GPAC_DEB_URL="https://download.tsi.telecom-paristech.fr/gpac/new_builds/gpac_latest_head_linux64.deb"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl binutils tar xz-utils \
