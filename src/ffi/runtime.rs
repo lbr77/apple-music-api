@@ -1345,15 +1345,18 @@ unsafe extern "C" fn dialog_handler(
         "dialogHandler invoked: title={title}, message={message}"
     );
 
-    let mut storage = [0_u8; 72];
+    // Keep the dialog response allocation on the heap for the same reason as
+    // credentials responses: the native presentation layer keeps consuming the
+    // object after this callback returns.
+    let storage = Box::into_raw(Box::new([0_u8; 72]));
+    let storage_ptr = unsafe { (*storage).as_mut_ptr() };
     unsafe {
-        *(storage.as_mut_ptr() as *mut *mut c_void) =
-            symbols.protocol_dialog_response_vtable.byte_add(16);
-        ptr::write_bytes(storage.as_mut_ptr().add(8), 0, 16);
+        *(storage_ptr as *mut *mut c_void) = symbols.protocol_dialog_response_vtable.byte_add(16);
+        ptr::write_bytes(storage_ptr.add(8), 0, 16);
     }
     let response = SharedPtr {
-        obj: unsafe { storage.as_mut_ptr().add(24).cast::<c_void>() },
-        ctrl_blk: storage.as_mut_ptr().cast::<c_void>(),
+        obj: unsafe { storage_ptr.add(24).cast::<c_void>() },
+        ctrl_blk: storage_ptr.cast::<c_void>(),
     };
     unsafe { (symbols.protocol_dialog_response_ctor)(response.obj) };
 
