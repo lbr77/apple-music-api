@@ -14,49 +14,82 @@ RUN apt-get update \
 
 FROM debian:bookworm-slim AS mp4box
 
-ARG ANDROID_NDK_URL="https://dl.google.com/android/repository/android-ndk-r25c-linux.zip"
+ARG GPAC_APT_URI="https://dist.gpac.io/gpac/linux/debian"
+ARG GPAC_APT_COMPONENT="nightly"
 
 RUN apt-get update \
+    && set -eux \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
-        unzip \
-        git \
-        build-essential \
-        pkg-config \
-        zlib1g-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /opt/android-ndk \
-    && curl -fsSL "$ANDROID_NDK_URL" -o /tmp/android-ndk.zip \
-    && unzip -q /tmp/android-ndk.zip -d /opt/android-ndk \
-    && ndk_dir="$(find /opt/android-ndk -mindepth 1 -maxdepth 1 -type d | head -n 1)" \
-    && mv "$ndk_dir" /opt/android-ndk/current \
-    && rm -f /tmp/android-ndk.zip \
-    && git clone --depth 1 https://github.com/gpac/gpac.git /tmp/gpac \
-    && cd /tmp/gpac \
-    && toolchain="/opt/android-ndk/current/toolchains/llvm/prebuilt/linux-x86_64" \
-    && sysroot="$toolchain/sysroot" \
-    && ./configure \
-        --prefix=/opt/mp4box \
-        --target-os=android \
-        --cross-prefix="$toolchain/bin/" \
-        --cc=x86_64-linux-android21-clang \
-        --cxx=x86_64-linux-android21-clang++ \
-        --extra-cflags="--sysroot=$sysroot" \
-        --extra-ldflags="--sysroot=$sysroot" \
-        --static-bin \
-    && sed -i "s#^AR=.*#AR=$toolchain/bin/llvm-ar#" config.mak \
-    && sed -i "s#^RANLIB=.*#RANLIB=$toolchain/bin/llvm-ranlib#" config.mak \
-    && sed -i "s#^STRIP=.*#STRIP=$toolchain/bin/llvm-strip#" config.mak \
-    && sed -i -E '/^GPAC_SH_FLAGS=/ { s/(^| )-lpthread( |$)/ /g; s/(^| )-pthread( |$)/ /g; s/[[:space:]]+$//; s/= /=/; }' config.mak \
-    && make -C src -j"$(nproc)" \
-    && make -C applications/mp4box -j"$(nproc)" \
-    && mkdir -p /opt/mp4box/bin \
-    && cp -f /tmp/gpac/applications/mp4box/mp4box /opt/mp4box/bin/MP4Box \
-    && test -x /opt/mp4box/bin/MP4Box \
-    && ln -sf /opt/mp4box/bin/MP4Box /opt/mp4box/bin/mp4box \
-    && rm -rf /tmp/gpac
+        binutils \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://dist.gpac.io/gpac/linux/gpg.asc -o /etc/apt/keyrings/gpac.asc \
+    && chmod a+r /etc/apt/keyrings/gpac.asc \
+    && printf 'Types: deb\nURIs: %s\nSuites: %s\nComponents: %s\nSigned-By: /etc/apt/keyrings/gpac.asc\n' \
+        "$GPAC_APT_URI" \
+        "$(. /etc/os-release && echo "$VERSION_CODENAME")" \
+        "$GPAC_APT_COMPONENT" \
+        > /etc/apt/sources.list.d/gpac.sources \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gpac \
+    && rm -rf /var/lib/apt/lists/* 
 
+RUN mp4box_path="$(command -v MP4Box || command -v mp4box)" \
+    && test -x "$mp4box_path" \
+    && libgpac_path="$(find /usr/lib /lib -name 'libgpac.so*' ! -name '*.a' | sort | head -n 1)" \
+    && test -n "$libgpac_path" \
+    && test -e "$libgpac_path" \
+    && interp="$(readelf -l "$mp4box_path" | sed -n 's/.*Requesting program interpreter: \(.*\)]/\1/p')" \
+    && test -n "$interp" \
+    && module_paths="$(if test -d /usr/lib/gpac; then find /usr/lib/gpac -type f -name '*.so' | sort; fi)" \
+    && deps="$( \
+        { \
+            ldd "$mp4box_path" "$libgpac_path"; \
+            if test -n "$module_paths"; then ldd $module_paths; fi; \
+        } | awk ' \
+                /=> \// { print $3 } \
+                /^\// && $1 !~ /:$/ { print $1 } \
+            ' \
+          | sort -u \
+    )" \
+    && install -d /out/usr/bin /out/usr/lib /out/lib64 /out/etc/ssl/certs \
+    && ln -s usr/lib /out/lib \
+    && cp -a "$mp4box_path" /out/usr/bin/MP4Box \
+    && if test -e /usr/bin/mp4box; then cp -a /usr/bin/mp4box /out/usr/local/bin/mp4box; fi \
+    && if test -d /usr/lib/gpac; then cp -a /usr/lib/gpac /out/usr/lib/gpac; fi \
+    && for dep in "$interp" "$libgpac_path" $deps; do \
+        clean_dep="${dep%:}"; \
+        real="$(readlink -f "$clean_dep")"; \
+        install -d "/out$(dirname "$real")"; \
+        cp -a "$real" "/out$real"; \
+        if test -L "$clean_dep"; then \
+            case "$clean_dep" in \
+                /lib/*) \
+                    link_path="/usr$clean_dep"; \
+                    ;; \
+                *) \
+                    link_path="$clean_dep"; \
+                    ;; \
+            esac; \
+            install -d "/out$(dirname "$link_path")"; \
+            cp -a "$clean_dep" "/out$link_path"; \
+        fi; \
+    done \
+    && for alt in \
+        /etc/alternatives/libblas.so.3-x86_64-linux-gnu \
+        /etc/alternatives/liblapack.so.3-x86_64-linux-gnu; do \
+        if test -L "$alt"; then \
+            alt_target="$(readlink "$alt")"; \
+            install -d "/out$(dirname "$alt")" "/out$(dirname "$alt_target")"; \
+            cp -a "$alt" "/out$alt"; \
+            cp -a "$alt_target" "/out$alt_target"; \
+        fi; \
+    done \
+    && if test -f /etc/ssl/certs/ca-certificates.crt; then \
+        cp -a /etc/ssl/certs/ca-certificates.crt /out/etc/ssl/certs/ca-certificates.crt; \
+    fi
+    
 FROM rust:bookworm AS builder
 
 ARG ANDROID_NDK_URL="https://dl.google.com/android/repository/android-ndk-r25c-linux.zip"
@@ -98,8 +131,7 @@ FROM scratch
 COPY --from=rootfs /out/rootfs /
 COPY --from=ffmpeg /opt/ffmpeg/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg /opt/ffmpeg/ffprobe /usr/local/bin/ffprobe
-COPY --from=mp4box /opt/mp4box/bin/MP4Box /usr/local/bin/MP4Box
-COPY --from=mp4box /opt/mp4box/bin/mp4box /usr/local/bin/mp4box
+COPY --from=mp4box /out/ /
 COPY --from=builder /app/target/x86_64-linux-android/release/main /main
 
 EXPOSE 8080
