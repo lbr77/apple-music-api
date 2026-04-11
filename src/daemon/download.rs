@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -23,12 +23,14 @@ const MUSIC_ORIGIN: &str = "https://music.apple.com";
 const DESKTOP_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
 pub(crate) const FFMPEG_BINARY: &str = "/usr/local/bin/ffmpeg";
 pub(crate) const FFPROBE_BINARY: &str = "/usr/local/bin/ffprobe";
+pub(crate) const MP4BOX_BINARY: &str = "/usr/local/bin/MP4Box";
 
 static ATTR_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"([A-Z0-9-]+)=(".*?"|[^,]+)"#).expect("valid attribute regex"));
 static SANITIZE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"[^A-Za-z0-9._-]+"#).expect("valid filename regex"));
 
+#[derive(Debug, Serialize)]
 pub struct PlaybackOutput {
     pub relative_path: String,
     pub size: u64,
@@ -54,6 +56,7 @@ pub(crate) struct BinaryHealth {
 pub(crate) struct ToolHealthReport {
     pub ffmpeg: BinaryHealth,
     pub ffprobe: BinaryHealth,
+    pub mp4box: BinaryHealth,
 }
 
 impl ToolHealthReport {
@@ -66,6 +69,7 @@ pub(crate) fn tool_health_report() -> ToolHealthReport {
     ToolHealthReport {
         ffmpeg: inspect_binary(FFMPEG_BINARY),
         ffprobe: inspect_binary(FFPROBE_BINARY),
+        mp4box: inspect_binary(MP4BOX_BINARY),
     }
 }
 
@@ -533,20 +537,19 @@ fn sanitized_variant_stem(variant_uri: &str) -> String {
 }
 
 fn probe_aac_stream(path: &Path) -> AppResult<(u32, u8)> {
-    let output = ffprobe_command()
-        .args([
-            "-v",
-            "error",
-            "-show_streams",
-            "-of",
-            "json",
-            &path.to_string_lossy(),
-        ])
-        .output()?;
+    let output = run_binary(
+        FFPROBE_BINARY,
+        &[
+            "-v".into(),
+            "error".into(),
+            "-show_streams".into(),
+            "-of".into(),
+            "json".into(),
+            path.to_string_lossy().into_owned(),
+        ],
+    )?;
     if !output.status.success() {
-        return Err(AppError::Message(
-            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        ));
+        return Err(AppError::Message(command_output_message(&output)));
     }
     let json: Value = serde_json::from_slice(&output.stdout)?;
     let stream = json
@@ -581,46 +584,43 @@ fn remux_output(
     aac_path: &Path,
     final_path: &Path,
 ) -> AppResult<()> {
-    let input = if is_aac_variant {
-        aac_path
-    } else {
-        fragmented_path
+    // GPAC remuxes sanitized non-AAC fragmented MP4 more reliably than a blind ffmpeg copy,
+    // so prefer MP4Box when it is installed at the expected runtime path.
+    let strategy = choose_remux_strategy(is_aac_variant, Path::new(MP4BOX_BINARY).is_file());
+    let output = match strategy {
+        RemuxStrategy::Ffmpeg => {
+            let input = if is_aac_variant {
+                aac_path
+            } else {
+                fragmented_path
+            };
+            run_binary(FFMPEG_BINARY, &ffmpeg_remux_args(input, final_path))?
+        }
+        RemuxStrategy::Mp4Box => run_binary(
+            MP4BOX_BINARY,
+            &mp4box_remux_args(fragmented_path, final_path),
+        )?,
     };
-    let output = ffmpeg_command()
-        .args([
-            "-y",
-            "-loglevel",
-            "error",
-            "-i",
-            &input.to_string_lossy(),
-            "-c",
-            "copy",
-            &final_path.to_string_lossy(),
-        ])
-        .output()?;
     if !output.status.success() {
-        return Err(AppError::Message(
-            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        ));
+        return Err(AppError::Message(command_output_message(&output)));
     }
     Ok(())
 }
 
 fn detect_codec_label(path: &Path) -> AppResult<String> {
-    let output = ffprobe_command()
-        .args([
-            "-v",
-            "error",
-            "-show_streams",
-            "-of",
-            "json",
-            &path.to_string_lossy(),
-        ])
-        .output()?;
+    let output = run_binary(
+        FFPROBE_BINARY,
+        &[
+            "-v".into(),
+            "error".into(),
+            "-show_streams".into(),
+            "-of".into(),
+            "json".into(),
+            path.to_string_lossy().into_owned(),
+        ],
+    )?;
     if !output.status.success() {
-        return Err(AppError::Message(
-            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        ));
+        return Err(AppError::Message(command_output_message(&output)));
     }
     let json: Value = serde_json::from_slice(&output.stdout)?;
     let codec = json
@@ -642,14 +642,6 @@ fn detect_codec_label(path: &Path) -> AppResult<String> {
     .to_owned())
 }
 
-fn ffmpeg_command() -> Command {
-    Command::new(FFMPEG_BINARY)
-}
-
-fn ffprobe_command() -> Command {
-    Command::new(FFPROBE_BINARY)
-}
-
 fn inspect_binary(path: &'static str) -> BinaryHealth {
     match Command::new(path).arg("-version").output() {
         Ok(output) if output.status.success() => BinaryHealth {
@@ -663,23 +655,12 @@ fn inspect_binary(path: &'static str) -> BinaryHealth {
                 .map(ToOwned::to_owned),
             error: None,
         },
-        Ok(output) => {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let message = stderr
-                .lines()
-                .chain(stdout.lines())
-                .map(str::trim)
-                .find(|line| !line.is_empty())
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| format!("process exited with status {}", output.status));
-            BinaryHealth {
-                path,
-                available: false,
-                version: None,
-                error: Some(message),
-            }
-        }
+        Ok(output) => BinaryHealth {
+            path,
+            available: false,
+            version: None,
+            error: Some(command_output_message(&output)),
+        },
         Err(error) => BinaryHealth {
             path,
             available: false,
@@ -687,6 +668,57 @@ fn inspect_binary(path: &'static str) -> BinaryHealth {
             error: Some(error.to_string()),
         },
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RemuxStrategy {
+    Ffmpeg,
+    Mp4Box,
+}
+
+fn choose_remux_strategy(is_aac_variant: bool, mp4box_available: bool) -> RemuxStrategy {
+    if is_aac_variant || !mp4box_available {
+        RemuxStrategy::Ffmpeg
+    } else {
+        RemuxStrategy::Mp4Box
+    }
+}
+
+fn ffmpeg_remux_args(input: &Path, output: &Path) -> Vec<String> {
+    vec![
+        "-y".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-i".into(),
+        input.to_string_lossy().into_owned(),
+        "-c".into(),
+        "copy".into(),
+        output.to_string_lossy().into_owned(),
+    ]
+}
+
+fn mp4box_remux_args(input: &Path, output: &Path) -> Vec<String> {
+    vec![
+        "-quiet".into(),
+        "-add".into(),
+        input.to_string_lossy().into_owned(),
+        "-new".into(),
+        output.to_string_lossy().into_owned(),
+    ]
+}
+
+fn run_binary(path: &'static str, args: &[String]) -> AppResult<Output> {
+    Ok(Command::new(path).args(args).output()?)
+}
+
+fn command_output_message(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .chain(String::from_utf8_lossy(&output.stdout).lines())
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("process exited with status {}", output.status))
 }
 
 #[derive(Debug)]

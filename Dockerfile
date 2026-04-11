@@ -12,6 +12,24 @@ RUN apt-get update \
     && test -x /opt/ffmpeg/ffprobe \
     && rm -f /tmp/ffmpeg.tar.xz
 
+FROM debian:bookworm-slim AS mp4box
+
+ARG GPAC_DEB_URL="https://download.tsi.telecom-paristech.fr/gpac/new_builds/linux64/gpac/gpac_0.7.2-DEV-latest-master_amd64.deb"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl binutils tar xz-utils \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /tmp/mp4box/linux-x64-unpacked /opt/mp4box/bin \
+    && curl -fsSL "$GPAC_DEB_URL" -o /tmp/mp4box/linux-x64.deb \
+    && cp /tmp/mp4box/linux-x64.deb /tmp/mp4box/linux-x64-unpacked/linux-x64.deb \
+    && cd /tmp/mp4box/linux-x64-unpacked \
+    && ar -x linux-x64.deb \
+    && tar -x --strip-components 1 -f data.tar.xz --wildcards '*/MP4Box' \
+    && test -x usr/bin/MP4Box \
+    && cp usr/bin/MP4Box /opt/mp4box/bin/MP4Box \
+    && ln -s MP4Box /opt/mp4box/bin/mp4box \
+    && rm -rf /tmp/mp4box
+
 FROM rust:bookworm AS builder
 
 ARG ANDROID_NDK_URL="https://dl.google.com/android/repository/android-ndk-r25c-linux.zip"
@@ -53,6 +71,8 @@ FROM scratch
 COPY --from=rootfs /out/rootfs /
 COPY --from=ffmpeg /opt/ffmpeg/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg /opt/ffmpeg/ffprobe /usr/local/bin/ffprobe
+COPY --from=mp4box /opt/mp4box/bin/MP4Box /usr/local/bin/MP4Box
+COPY --from=mp4box /opt/mp4box/bin/mp4box /usr/local/bin/mp4box
 COPY --from=builder /app/target/x86_64-linux-android/release/main /main
 
 EXPOSE 8080

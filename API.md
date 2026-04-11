@@ -4,6 +4,30 @@ Base URL: `http://localhost:<port>`
 
 ---
 
+## GET /health
+
+Report daemon state and external media tool availability from the fixed `/usr/local/bin` runtime paths.
+
+`ffmpeg` and `ffprobe` are required for a healthy status. `MP4Box` is reported separately because playback remux prefers it for sanitized non-AAC fragmented MP4 output when available.
+
+**Example**
+
+```bash
+curl "http://localhost:8080/health"
+```
+
+```json
+{
+  "status": "ok",
+  "state": "logged_in",
+  "ffmpeg": { "path": "/usr/local/bin/ffmpeg", "available": true, "version": "ffmpeg version 7.0.2-static" },
+  "ffprobe": { "path": "/usr/local/bin/ffprobe", "available": true, "version": "ffprobe version 7.0.2-static" },
+  "mp4box": { "path": "/usr/local/bin/MP4Box", "available": true, "version": "MP4Box - GPAC version 2.5-DEV-rev0-g..." }
+}
+```
+
+---
+
 ## GET /search
 
 Search for songs, albums, or artists.

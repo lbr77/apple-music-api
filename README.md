@@ -47,48 +47,49 @@ Quick health check:
 curl http://127.0.0.1:8080/health
 ```
 
-## Runtime Options
+The daemon expects `ffmpeg`, `ffprobe`, and `MP4Box` at `/usr/local/bin`.
 
-`main` accepts these key CLI flags:
+## Deployment
 
-| Flag | Default | Description |
-|---|---|---|
-| `--host`, `-H` | `127.0.0.1` | Bind address |
-| `--daemon-port` | `8080` | HTTP daemon port |
-| `--proxy`, `-P` | _(none)_ | Upstream proxy used by Apple API client |
-| `--base-dir`, `-B` | `/data/data/com.apple.android.music/files` | Base data dir for native runtime |
-| `--lib-dir` | auto-detect | Rootfs library directory override |
-| `--cache-dir` | `cache` | Cache output directory |
-| `--storefront` | `us` | Default storefront |
-| `--language` | `""` | Optional Apple API language (`l` query) |
-| `--device-info`, `-I` | preset value | Device profile passed to native layer |
-| `--decrypt-workers` | `clamp(num_cpus, 2..8)` | Decrypt worker count |
-| `--decrypt-inflight` | `max(2, workers * 2)` | Max queued decrypt jobs |
+For runtime persistence, mount and persist only this directory:
 
-If `--lib-dir` is not specified, the runtime tries:
+```text
+/data/data/com.apple.android.music
+```
 
-1. `/system/lib64`
-2. `rootfs/system/lib64`
-3. `./rootfs/system/lib64`
+The runtime default `--base-dir` points to `/data/data/com.apple.android.music/files`, so mounting the parent directory above is enough to preserve runtime data.
+
+Container examples:
+
+```bash
+docker run --rm -p 8080:8080 \
+	-v ./persist/com.apple.android.music:/data/data/com.apple.android.music \
+	ghcr.io/<owner>/<repo>:latest \
+	/system/bin/main --host 0.0.0.0 --daemon-port 8080
+```
+
+```yaml
+services:
+	wrapper:
+		image: ghcr.io/<owner>/<repo>:latest
+		command: ["/system/bin/main", "--host", "0.0.0.0", "--daemon-port", "8080"]
+		ports:
+			- "8080:8080"
+		volumes:
+			- ./persist/com.apple.android.music:/data/data/com.apple.android.music
+		restart: unless-stopped
+```
 
 ## HTTP API
 
-The daemon exposes a JSON HTTP API.
 
-Core endpoints:
+Error responses also return JSON. The request outcome is always carried by `status`, and login/session state remains in `state` when it is relevant.
 
-- `GET /health`
-- `GET /status`
-- `POST /login`
-- `POST /login/2fa`
-- `POST /login/reset`
-- `POST /logout`
-- `GET /search`
-- `GET /album/{id}`
-- `GET /song/{id}`
-- `GET /lyrics/{id}`
-- `GET /playback/{id}`
-- `GET /cache/...` (static cached files)
+```json
+{"status":"error","state":"logged_out","message":"no active session"}
+```
+
+`status` values for error responses are always `error`; the daemon does not use `status: "logged_out"`.
 
 Full request/response examples are documented in [API.md](API.md).
 
@@ -140,6 +141,8 @@ curl -X POST http://127.0.0.1:8080/logout
 - Audio: `./cache/albums/<albumId>/<songId>.m4a`
 
 `GET /playback/{id}?redirect=true` returns HTTP 302 to the cached `.m4a` file under `/cache/...`.
+
+The Docker image already bundles `MP4Box`, `ffmpeg`, and `ffprobe`, so `/health` exposes all three tool reports at runtime.
 
 ## Legacy TCP Notes
 

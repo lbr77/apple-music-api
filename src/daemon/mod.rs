@@ -154,6 +154,14 @@ impl AuthResponse {
     }
 }
 
+#[derive(Debug, Serialize)]
+struct ErrorResponse {
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    state: Option<&'static str>,
+    message: String,
+}
+
 fn default_search_limit() -> usize {
     10
 }
@@ -183,6 +191,7 @@ async fn health_handler(State(context): State<Arc<DaemonContext>>) -> Response {
             "state": state_name(&context.state),
             "ffmpeg": report.ffmpeg,
             "ffprobe": report.ffprobe,
+            "mp4box": report.mp4box,
         })),
     )
         .into_response()
@@ -453,7 +462,7 @@ fn playback_response(playback: PlaybackOutput) -> serde_json::Value {
 
 struct ApiError {
     status: StatusCode,
-    state: &'static str,
+    state: Option<&'static str>,
     message: String,
 }
 
@@ -461,7 +470,7 @@ impl ApiError {
     fn bad_request(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
-            state: "logged_out",
+            state: None,
             message: message.into(),
         }
     }
@@ -469,7 +478,7 @@ impl ApiError {
     fn conflict(state: &'static str, message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,
-            state,
+            state: Some(state),
             message: message.into(),
         }
     }
@@ -477,7 +486,7 @@ impl ApiError {
     fn internal(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            state: "logged_out",
+            state: None,
             message: message.into(),
         }
     }
@@ -488,7 +497,7 @@ impl From<AppError> for ApiError {
         match error {
             AppError::NoActiveSession => Self {
                 status: StatusCode::CONFLICT,
-                state: "logged_out",
+                state: Some("logged_out"),
                 message: "no active session".into(),
             },
             AppError::Protocol(message)
@@ -496,7 +505,7 @@ impl From<AppError> for ApiError {
             | AppError::Native(message)
             | AppError::Message(message) => Self {
                 status: StatusCode::BAD_REQUEST,
-                state: "logged_out",
+                state: None,
                 message,
             },
             other => Self::internal(other.to_string()),
@@ -514,10 +523,11 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (
             self.status,
-            Json(json!({
-                "state": self.state,
-                "error": self.message,
-            })),
+            Json(ErrorResponse {
+                status: "error",
+                state: self.state,
+                message: self.message,
+            }),
         )
             .into_response()
     }
@@ -530,5 +540,32 @@ fn state_name(state: &AppState) -> &'static str {
         "logged_in"
     } else {
         "logged_out"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ApiError, ErrorResponse};
+    use axum::http::StatusCode;
+
+    #[test]
+    fn conflict_errors_serialize_request_status_separately_from_session_state() {
+        let response = ErrorResponse {
+            status: "error",
+            state: Some("logged_out"),
+            message: "no active session".into(),
+        };
+        let json = serde_json::to_string(&response).expect("serialize error response");
+        assert!(json.contains("\"status\":\"error\""));
+        assert!(json.contains("\"state\":\"logged_out\""));
+        assert!(json.contains("\"message\":\"no active session\""));
+    }
+
+    #[test]
+    fn bad_request_errors_do_not_invent_logged_out_state() {
+        let error = ApiError::bad_request("query parameter is required");
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.state, None);
+        assert_eq!(error.message, "query parameter is required");
     }
 }

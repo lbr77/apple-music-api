@@ -8,6 +8,9 @@ on:
       - main
     tags:
       - "v*"
+    paths:
+      - "**/*.rs"
+      - "Dockerfile"  
 
 permissions:
   contents: read
