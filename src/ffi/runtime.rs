@@ -296,8 +296,11 @@ impl Drop for NativeSession {
         unsafe {
             (self.symbols.lease_manager_refresh)(self.lease_manager_ptr(), &automatic);
             (self.symbols.lease_manager_release)(self.lease_manager_ptr());
-            (self.symbols.session_ctrl_destroy)();
         }
+        crate::app_warn!(
+            "ffi::session",
+            "skipping SVFootHillSessionCtrl::destroy during drop; native controller teardown is unstable in daemon runtime"
+        );
         crate::app_info!(
             "ffi::session",
             "native session core resources released without implicit account logout"
@@ -818,15 +821,18 @@ impl NativeSession {
     pub fn refresh_lease(&self) -> AppResult<()> {
         crate::app_info!(
             "ffi::session",
-            "refreshing playback lease and resetting decrypt contexts"
+            "refreshing playback lease"
         );
         let _guard = self.session_lock.lock().expect("session lock poisoned");
         let automatic = 1_u8;
         unsafe {
             (self.symbols.lease_manager_refresh)(self.lease_manager_ptr(), &automatic);
             (self.symbols.lease_manager_request_lease)(self.lease_manager_ptr(), &automatic);
-            (self.symbols.session_ctrl_reset_all_contexts)(self.session_ctrl);
         }
+        crate::app_warn!(
+            "ffi::session",
+            "skipping SVFootHillSessionCtrl::resetAllContexts during lease refresh; native controller reset is unstable in daemon runtime"
+        );
         crate::app_info!("ffi::session", "playback lease refreshed");
         Ok(())
     }
@@ -847,10 +853,10 @@ impl NativeSession {
             "skipping native account-store sign-out; clearing local native session state only"
         );
 
-        unsafe {
-            (self.symbols.session_ctrl_reset_all_contexts)(self.session_ctrl);
-        }
-        crate::app_info!("ffi::session", "session controller contexts cleared");
+        crate::app_warn!(
+            "ffi::session",
+            "skipping SVFootHillSessionCtrl::resetAllContexts during logout; removing restore markers only"
+        );
 
         for marker in ["STOREFRONT_ID", "MUSIC_TOKEN"] {
             let _ = fs::remove_file(self.config.base_dir.join(marker));

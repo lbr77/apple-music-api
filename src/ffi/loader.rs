@@ -64,7 +64,6 @@ type FnLeaseManagerRefresh = unsafe extern "C" fn(*mut c_void, *const u8);
 type FnLeaseManagerRequestLease = unsafe extern "C" fn(*mut c_void, *const u8);
 type FnLeaseManagerRelease = unsafe extern "C" fn(*mut c_void);
 type FnSessionCtrlInstance = unsafe extern "C" fn() -> *mut c_void;
-type FnSessionCtrlDestroy = unsafe extern "C" fn() -> *mut c_void;
 type FnSessionCtrlGetPersistentKey = unsafe extern "C" fn(
     *mut SharedPtr,
     *mut c_void,
@@ -78,7 +77,6 @@ type FnSessionCtrlGetPersistentKey = unsafe extern "C" fn(
     *const StdString,
 );
 type FnSessionCtrlDecryptContext = unsafe extern "C" fn(*mut SharedPtr, *mut c_void, *mut c_void);
-type FnSessionCtrlResetAllContexts = unsafe extern "C" fn(*mut c_void);
 type FnPContextKdContext = unsafe extern "C" fn(*mut c_void) -> *mut *mut c_void;
 type FnSharedPtrPContextDrop = unsafe extern "C" fn(*mut SharedPtr);
 type FnDecryptSample =
@@ -172,10 +170,8 @@ pub struct NativeSymbols {
     pub lease_manager_request_lease: FnLeaseManagerRequestLease,
     pub lease_manager_release: FnLeaseManagerRelease,
     pub session_ctrl_instance: FnSessionCtrlInstance,
-    pub session_ctrl_destroy: FnSessionCtrlDestroy,
     pub session_ctrl_get_persistent_key: FnSessionCtrlGetPersistentKey,
     pub session_ctrl_decrypt_context: FnSessionCtrlDecryptContext,
-    pub session_ctrl_reset_all_contexts: FnSessionCtrlResetAllContexts,
     pub pcontext_kd_context: FnPContextKdContext,
     pub shared_ptr_pcontext_drop: FnSharedPtrPContextDrop,
     pub decrypt_sample: FnDecryptSample,
@@ -452,10 +448,6 @@ impl NativeSymbols {
                 "_ZN21SVFootHillSessionCtrl8instanceEv",
                 FnSessionCtrlInstance
             ),
-            session_ctrl_destroy: load_symbol!(
-                "_ZN21SVFootHillSessionCtrl7destroyEv",
-                FnSessionCtrlDestroy
-            ),
             session_ctrl_get_persistent_key: load_symbol!(
                 "_ZN21SVFootHillSessionCtrl16getPersistentKeyERKNSt6__ndk112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEES8_S8_S8_S8_S8_S8_S8_",
                 FnSessionCtrlGetPersistentKey
@@ -463,10 +455,6 @@ impl NativeSymbols {
             session_ctrl_decrypt_context: load_symbol!(
                 "_ZN21SVFootHillSessionCtrl14decryptContextERKNSt6__ndk112basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEERKN11SVDecryptor15SVDecryptorTypeERKb",
                 FnSessionCtrlDecryptContext
-            ),
-            session_ctrl_reset_all_contexts: load_symbol!(
-                "_ZN21SVFootHillSessionCtrl16resetAllContextsEv",
-                FnSessionCtrlResetAllContexts
             ),
             pcontext_kd_context: load_symbol!(
                 "_ZNK18SVFootHillPContext9kdContextEv",
