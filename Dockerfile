@@ -1,4 +1,4 @@
-FROM debian:stable-slim AS ffmpeg
+FROM debian:bookworm-slim AS ffmpeg
 
 ARG FFMPEG_STATIC_URL="https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz"
 
@@ -12,36 +12,56 @@ RUN apt-get update \
     && test -x /opt/ffmpeg/ffprobe \
     && rm -f /tmp/ffmpeg.tar.xz
 
-FROM rust:slim-bookworm as builder
-# Install android NDK
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip \
+FROM rust:bookworm AS builder
+
+ARG ANDROID_NDK_URL="https://dl.google.com/android/repository/android-ndk-r25c-linux.zip"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/android-ndk \
-    && curl -fsSL "https://dl.google.com/android/repository/android-ndk-r25c-linux.zip" -o /tmp/android-ndk.zip \
-    && unzip /tmp/android-ndk.zip -d /opt/android-ndk --strip-components=1 \
+    && curl -fsSL "$ANDROID_NDK_URL" -o /tmp/android-ndk.zip \
+    && unzip -q /tmp/android-ndk.zip -d /opt/android-ndk \
+    && ndk_dir="$(find /opt/android-ndk -mindepth 1 -maxdepth 1 -type d | head -n 1)" \
+    && mv "$ndk_dir" /opt/android-ndk/current \
     && rm -f /tmp/android-ndk.zip
-RUN cargo install cargo-ndk
 
-COPY . /app
+ENV ANDROID_NDK_HOME=/opt/android-ndk/current
+RUN cargo install --locked cargo-ndk
+RUN rustup target add x86_64-linux-android
+
 WORKDIR /app
-RUN ANDROID_NDK_HOME=/opt/android-ndk cargo ndk -t x86_64 --release --output ./target/wrapper
+COPY . .
+RUN cargo ndk -t x86_64 build --release --bin wrapper
 
+FROM debian:bookworm-slim AS rootfs
 
-FROM debian:stable-slim as downloader
+ARG ROOTFS_ARCHIVE_URL="https://github.com/WorldObservationLog/wrapper/archive/refs/heads/main.tar.gz"
 
-# download rootfs from https://github.com/WorldObservationLog/wrapper
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl tar \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /tmp/rootfs /out \
+    && curl -fsSL "$ROOTFS_ARCHIVE_URL" -o /tmp/rootfs/rootfs.tar.gz \
+    && tar -xzf /tmp/rootfs/rootfs.tar.gz -C /tmp/rootfs \
+    && src_dir="$(find /tmp/rootfs -mindepth 2 -maxdepth 2 -type d -name rootfs | head -n 1)" \
+    && test -n "$src_dir" \
+    && cp -a "$src_dir" /out/rootfs
 
-FROM debian:stable-slim
+FROM debian:bookworm-slim
 
-ENV args=""
+ENV ARGS=""
 
-COPY --from=downloader /app/rootfs /app/rootfs
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=rootfs /out/rootfs /app/rootfs
 RUN mkdir -p /app/rootfs/usr/local/bin
 COPY --from=ffmpeg /opt/ffmpeg/ffmpeg /app/rootfs/usr/local/bin/ffmpeg
 COPY --from=ffmpeg /opt/ffmpeg/ffprobe /app/rootfs/usr/local/bin/ffprobe
-COPY --from=builder /app/target/wrapper/wrapper /app/wrapper
-WORKDIR /app
-
-CMD ["bash", "-c", "/app/wrapper $args"]
+COPY --from=builder /app/target/x86_64-linux-android/release/wrapper /app/wrapper
 
 EXPOSE 8080
+CMD ["sh", "-c", "/app/wrapper $ARGS"]
