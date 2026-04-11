@@ -2,64 +2,141 @@
 
 Rust rewrite of the original [wrapper](https://github.com/WorldObservationLog/wrapper) and [go-api](https://github.com/akinazuki/apple-music-downloader/blob/main/API.md) flow for `x86_64-linux-android`.
 
+This repository currently ships two binaries:
+
+- `main`: daemon runtime that serves the HTTP API
+- `wrapper`: launcher that enters `./rootfs`, prepares runtime devices, and execs `/system/bin/main`
+
 ## Build
 
+### Android target
+
 ```bash
-cd rust
 cargo ndk -t x86_64 build --release
 ```
 
 The release binary is `target/x86_64-linux-android/release/wrapper`.
 
+### Host build (for local debug)
 
-## Control Protocol
-
-The control server accepts one JSON request per TCP connection and returns one JSON response before closing the socket.
-
-### Requests
-
-```json
-{"type":"login","username":"apple@example.com","password":"secret"}
-{"type":"submit_2fa","code":"123456"}
-{"type":"account_info"}
-{"type":"query_m3u8","adam":"1440924808"}
-{"type":"logout"}
-{"type":"status"}
-{"type":"refresh_lease"}
+```bash
+cargo build --release
 ```
 
-### Responses
+The daemon binary is `target/release/main`.
+
+## Run
+
+Run the daemon directly:
+
+```bash
+./target/release/main --daemon-port 8080
+```
+
+By default it binds to `127.0.0.1:8080`.
+
+Quick health check:
+
+```bash
+curl http://127.0.0.1:8080/health
+```
+
+## Runtime Options
+
+`main` accepts these key CLI flags:
+
+| Flag | Default | Description |
+|---|---|---|
+| `--host`, `-H` | `127.0.0.1` | Bind address |
+| `--daemon-port` | `8080` | HTTP daemon port |
+| `--proxy`, `-P` | _(none)_ | Upstream proxy used by Apple API client |
+| `--base-dir`, `-B` | `/data/data/com.apple.android.music/files` | Base data dir for native runtime |
+| `--lib-dir` | auto-detect | Rootfs library directory override |
+| `--cache-dir` | `cache` | Cache output directory |
+| `--storefront` | `us` | Default storefront |
+| `--language` | `""` | Optional Apple API language (`l` query) |
+| `--device-info`, `-I` | preset value | Device profile passed to native layer |
+| `--decrypt-workers` | `clamp(num_cpus, 2..8)` | Decrypt worker count |
+| `--decrypt-inflight` | `max(2, workers * 2)` | Max queued decrypt jobs |
+
+If `--lib-dir` is not specified, the runtime tries:
+
+1. `/system/lib64`
+2. `rootfs/system/lib64`
+3. `./rootfs/system/lib64`
+
+## HTTP API
+
+The daemon exposes a JSON HTTP API.
+
+Core endpoints:
+
+- `GET /health`
+- `GET /status`
+- `POST /login`
+- `POST /login/2fa`
+- `POST /login/reset`
+- `POST /logout`
+- `GET /search`
+- `GET /album/{id}`
+- `GET /song/{id}`
+- `GET /lyrics/{id}`
+- `GET /playback/{id}`
+- `GET /cache/...` (static cached files)
+
+Full request/response examples are documented in [API.md](API.md).
+
+## Login and 2FA Flow
+
+### 1) Start login
+
+```bash
+curl -X POST http://127.0.0.1:8080/login \
+	-H 'content-type: application/json' \
+	-d '{"username":"apple@example.com","password":"secret"}'
+```
+
+Possible result:
+
+```json
+{"status":"need_2fa","state":"awaiting_2fa","message":"verification code required"}
+```
+
+### 2) Submit 2FA code
+
+```bash
+curl -X POST http://127.0.0.1:8080/login/2fa \
+	-H 'content-type: application/json' \
+	-d '{"code":"123456"}'
+```
+
+Success result:
 
 ```json
 {"status":"ok","state":"logged_in"}
-{"status":"ok","state":"logged_out"}
-{"status":"ok","state":"logged_in","storefront_id":"...","dev_token":"...","music_token":"..."}
-{"status":"ok","state":"logged_in","adam":"1440924808","url":"https://..."}
-{"status":"need_2fa","state":"awaiting_2fa","message":"verification code required"}
-{"status":"error","state":"logged_out","message":"login failed"}
 ```
 
-If login needs 2FA, the server responds with `need_2fa` and closes that control connection.
-The next control connection must send `{"type":"submit_2fa","code":"..."}` to resume the same native login flow.
+### 3) Check status
 
-`account_info` and `query_m3u8` are also part of the control plane now, so there is no separate account or m3u8 TCP listener anymore.
+```bash
+curl http://127.0.0.1:8080/status
+```
 
-## Decrypt Flow
+### 4) Logout
 
-The decrypt plane stays on its own TCP port and keeps the legacy binary framing:
+```bash
+curl -X POST http://127.0.0.1:8080/logout
+```
 
-1. `u8 adam_len`
-2. `adam_len` bytes of `adam`
-3. `u8 uri_len`
-4. `uri_len` bytes of `uri`
-5. repeated `u32 native-endian sample_len + sample bytes`
-6. `u32 == 0` terminates the stream
+## Cache Layout
 
-For each decrypt connection the runtime:
+- Lyrics: `./cache/lyrics/<songId>.lrc`
+- Audio: `./cache/albums/<albumId>/<songId>.m4a`
 
-- reads the `(adam, uri)` context key once
-- builds exactly one native decrypt context for that connection
-- decrypts samples strictly in receive order
-- writes each decrypted sample back immediately
+`GET /playback/{id}?redirect=true` returns HTTP 302 to the cached `.m4a` file under `/cache/...`.
 
-The native decryptor keeps mutable state inside the context, so the Rust path mirrors the original C behavior instead of fanning a single stream out across multiple workers.
+## Legacy TCP Notes
+
+The previous one-request-per-connection control protocol and raw decrypt TCP framing are legacy behavior from earlier runtime wiring.
+
+For current integration, use the HTTP API above as the primary control surface.
