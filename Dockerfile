@@ -56,7 +56,7 @@ RUN mp4box_path="$(command -v MP4Box || command -v mp4box)" \
     && install -d /out/usr/bin /out/usr/lib /out/lib64 /out/etc/ssl/certs \
     && ln -s usr/lib /out/lib \
     && cp -a "$mp4box_path" /out/usr/bin/MP4Box \
-    && if test -e /usr/bin/mp4box; then cp -a /usr/bin/mp4box /out/usr/local/bin/mp4box; fi \
+    && if test -e /usr/bin/mp4box; then cp -a /usr/bin/mp4box /out/usr/bin/mp4box; fi \
     && if test -d /usr/lib/gpac; then cp -a /usr/lib/gpac /out/usr/lib/gpac; fi \
     && for dep in "$interp" "$libgpac_path" $deps; do \
         clean_dep="${dep%:}"; \
