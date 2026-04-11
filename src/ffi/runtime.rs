@@ -1,6 +1,7 @@
 use std::ffi::{CString, c_char, c_long, c_void};
 use std::fs;
 use std::mem::{MaybeUninit, size_of};
+use std::path::Path;
 use std::ptr;
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -384,17 +385,25 @@ impl NativePlatform {
         let _login_guard = CurrentLoginGuard::install(Arc::clone(&attempt));
         let (request_context, presentation) = self.authenticate(request_context)?;
         crate::app_info!("ffi::platform", "authenticate flow completed successfully");
-        let session = NativeSession::new(
-            self.config.clone(),
-            Arc::clone(&self.symbols),
-            request_context,
-            presentation,
-            self.device_guid_obj,
-        );
-        if session.is_err() {
-            clear_callback_context(presentation);
+        self.build_session(request_context, presentation)
+    }
+
+    pub fn restore_session(&self) -> AppResult<Option<NativeSession>> {
+        if !persisted_login_markers_exist(&self.config.base_dir) {
+            crate::app_info!(
+                "ffi::platform",
+                "no persisted login markers found; skipping startup session restore"
+            );
+            return Ok(None);
         }
-        session
+
+        crate::app_info!(
+            "ffi::platform",
+            "persisted login markers detected; attempting startup session restore"
+        );
+        let request_context = self.init_request_context()?;
+        let presentation = self.install_presentation(&request_context);
+        Ok(Some(self.build_session(request_context, presentation)?))
     }
 
     fn clear_login_markers(&self) -> AppResult<()> {
@@ -413,6 +422,39 @@ impl NativePlatform {
             }
         }
         Ok(())
+    }
+
+    fn install_presentation(&self, request_context: &SharedPtr) -> SharedPtr {
+        let mut presentation = SharedPtr::default();
+        unsafe {
+            (self.symbols.android_presentation_make_shared)(&mut presentation);
+            (self.symbols.set_dialog_handler)(presentation.obj, dialog_handler);
+            (self.symbols.set_credential_handler)(presentation.obj, credential_handler);
+            (self.symbols.request_context_set_presentation)(request_context.obj, &presentation);
+        }
+        crate::app_info!(
+            "ffi::platform",
+            "presentation interface installed on request context"
+        );
+        presentation
+    }
+
+    fn build_session(
+        &self,
+        request_context: SharedPtr,
+        presentation: SharedPtr,
+    ) -> AppResult<NativeSession> {
+        let session = NativeSession::new(
+            self.config.clone(),
+            Arc::clone(&self.symbols),
+            request_context,
+            presentation,
+            self.device_guid_obj,
+        );
+        if session.is_err() {
+            clear_callback_context(presentation);
+        }
+        session
     }
 
     fn init_request_context(&self) -> AppResult<SharedPtr> {
@@ -1514,13 +1556,7 @@ impl Drop for CurrentLoginGuard {
 impl NativePlatform {
     fn authenticate(&self, request_context: SharedPtr) -> AppResult<(SharedPtr, SharedPtr)> {
         crate::app_info!("ffi::platform", "starting authenticate flow");
-        let mut presentation = SharedPtr::default();
-        unsafe {
-            (self.symbols.android_presentation_make_shared)(&mut presentation);
-            (self.symbols.set_dialog_handler)(presentation.obj, dialog_handler);
-            (self.symbols.set_credential_handler)(presentation.obj, credential_handler);
-            (self.symbols.request_context_set_presentation)(request_context.obj, &presentation);
-        }
+        let presentation = self.install_presentation(&request_context);
         crate::app_info!(
             "ffi::platform",
             "presentation interface installed for authenticate flow"
@@ -1566,9 +1602,19 @@ impl NativePlatform {
     }
 }
 
+fn persisted_login_markers_exist(base_dir: &Path) -> bool {
+    // We only attempt a startup restore after a previously completed login wrote both markers.
+    ["STOREFRONT_ID", "MUSIC_TOKEN"]
+        .into_iter()
+        .all(|marker| base_dir.join(marker).is_file())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{LoginAttempt, LoginWaitState};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{LoginAttempt, LoginWaitState, persisted_login_markers_exist};
 
     #[test]
     fn repeated_primary_prompt_is_scoped_to_one_attempt() {
@@ -1591,5 +1637,25 @@ mod tests {
             }
             _ => panic!("unexpected login state"),
         }
+    }
+
+    #[test]
+    fn persisted_login_markers_require_both_files() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let base_dir = std::env::temp_dir().join(format!("wrapper-rust-login-markers-{unique}"));
+        fs::create_dir_all(&base_dir).expect("temp dir should be created");
+
+        assert!(!persisted_login_markers_exist(&base_dir));
+
+        fs::write(base_dir.join("STOREFRONT_ID"), b"us").expect("storefront marker should exist");
+        assert!(!persisted_login_markers_exist(&base_dir));
+
+        fs::write(base_dir.join("MUSIC_TOKEN"), b"token").expect("music marker should exist");
+        assert!(persisted_login_markers_exist(&base_dir));
+
+        fs::remove_dir_all(base_dir).expect("temp dir should be removed");
     }
 }

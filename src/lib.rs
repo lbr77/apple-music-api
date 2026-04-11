@@ -11,7 +11,7 @@ use config::AppConfig;
 use daemon::run_daemon_server;
 use error::AppResult;
 use ffi::{NativePlatform, install_android_log_shim};
-use runtime::AppState;
+use runtime::{AppState, SessionRuntime};
 
 pub async fn run_server_process() -> AppResult<()> {
     install_android_log_shim();
@@ -45,6 +45,7 @@ async fn run_server(config: AppConfig) -> AppResult<()> {
     let platform = Arc::new(NativePlatform::bootstrap(config.clone())?);
     let state = Arc::new(AppState::default());
     crate::app_info!("main", "native platform bootstrap completed");
+    restore_startup_session(&platform, &state);
 
     crate::app_info!("main", "starting daemon http server");
     tokio::spawn(run_daemon_server(config, platform, state))
@@ -53,4 +54,25 @@ async fn run_server(config: AppConfig) -> AppResult<()> {
             crate::error::AppError::Message(format!("daemon server panicked: {error}"))
         })??;
     Ok(())
+}
+
+fn restore_startup_session(platform: &NativePlatform, state: &AppState) {
+    match platform.restore_session() {
+        Ok(Some(session)) => match SessionRuntime::new(session) {
+            Ok(session) => {
+                state.replace_session(Arc::new(session));
+                crate::app_info!("main", "restored persisted login state during startup");
+            }
+            Err(error) => {
+                crate::app_warn!(
+                    "main",
+                    "startup session restore built a native session but profile recovery failed: {error}"
+                );
+            }
+        },
+        Ok(None) => {}
+        Err(error) => {
+            crate::app_warn!("main", "startup session restore failed: {error}");
+        }
+    }
 }

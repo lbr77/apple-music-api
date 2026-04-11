@@ -59,6 +59,7 @@ For runtime persistence, mount and persist only this directory:
 ```
 
 The runtime default `--base-dir` points to `/data/data/com.apple.android.music/files`, so mounting the parent directory above is enough to preserve runtime data.
+When that directory survives a restart, the Rust daemon attempts to restore the previous login state during startup before serving requests.
 
 Container examples:
 
