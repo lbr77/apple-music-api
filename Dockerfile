@@ -32,7 +32,7 @@ RUN rustup target add x86_64-linux-android
 
 WORKDIR /app
 COPY . .
-RUN cargo ndk -t x86_64 build --release --bin wrapper
+RUN cargo ndk -t x86_64 build --release --bin main
 
 FROM debian:bookworm-slim AS rootfs
 
@@ -48,20 +48,12 @@ RUN apt-get update \
     && test -n "$src_dir" \
     && cp -a "$src_dir" /out/rootfs
 
-FROM debian:bookworm-slim
+FROM scratch
 
-ENV ARGS=""
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-COPY --from=rootfs /out/rootfs /app/rootfs
-RUN mkdir -p /app/rootfs/usr/local/bin
-COPY --from=ffmpeg /opt/ffmpeg/ffmpeg /app/rootfs/usr/local/bin/ffmpeg
-COPY --from=ffmpeg /opt/ffmpeg/ffprobe /app/rootfs/usr/local/bin/ffprobe
-COPY --from=builder /app/target/x86_64-linux-android/release/wrapper /app/wrapper
+COPY --from=rootfs /out/rootfs /
+COPY --from=ffmpeg /opt/ffmpeg/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg /opt/ffmpeg/ffprobe /usr/local/bin/ffprobe
+COPY --from=builder /app/target/x86_64-linux-android/release/main /main
 
 EXPOSE 8080
-CMD ["sh", "-c", "/app/wrapper $ARGS"]
+ENTRYPOINT ["/main"]

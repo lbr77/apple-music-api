@@ -7,10 +7,6 @@ edition = "2024"
 name = "main"
 path = "src/bin/main.rs"
 
-[[bin]]
-name = "wrapper"
-path = "src/bin/wrapper.rs"
-
 [dependencies]
 axum = "0.8.6"
 clap = { version = "4.5.40", features = ["derive"] }
