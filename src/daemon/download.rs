@@ -637,22 +637,21 @@ fn embed_mp4box_tags(
 ) -> AppResult<()> {
     let cover_path = download_cover_artwork(client, song, album, album_dir, song_id)?;
     let tags_path = album_dir.join(format!("{song_id}.itags.txt"));
+    let tmp_dir = album_dir.join(".mp4box-tmp").join(song_id);
+    fs::create_dir_all(&tmp_dir)?;
     fs::write(
         &tags_path,
         build_mp4box_tag_file(song, cover_path.as_deref()),
     )?;
 
     let args = [
+        "-tmp".into(),
+        tmp_dir.to_string_lossy().into_owned(),
         "-itags".into(),
         tags_path.to_string_lossy().into_owned(),
         final_path.to_string_lossy().into_owned(),
     ];
     let output = run_binary("embed MP4 tags", MP4BOX_BINARY, &args)?;
-
-    let _ = fs::remove_file(&tags_path);
-    if let Some(cover_path) = &cover_path {
-        let _ = fs::remove_file(cover_path);
-    }
 
     if !output.status.success() {
         return Err(command_failure_error(
@@ -662,6 +661,14 @@ fn embed_mp4box_tags(
             &output,
         ));
     }
+
+    // Leave the tag manifest and artwork behind on failure so container-only I/O bugs
+    // can be inspected directly from the cache directory.
+    let _ = fs::remove_file(&tags_path);
+    if let Some(cover_path) = &cover_path {
+        let _ = fs::remove_file(cover_path);
+    }
+    let _ = fs::remove_dir(&tmp_dir);
     Ok(())
 }
 
