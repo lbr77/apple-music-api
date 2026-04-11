@@ -45,10 +45,14 @@ RUN apt-get update \
         --extra-cflags="--sysroot=$sysroot" \
         --extra-ldflags="--sysroot=$sysroot" \
         --static-bin \
+    # GPAC's generic configure path keeps Unix pthread linker flags for Android.
+    # Bionic provides pthread symbols via libc, so -lpthread breaks NDK linking.
+    && sed -i 's#^PTHREAD_LDFLAGS=.*#PTHREAD_LDFLAGS=#' config.mak \
+    && sed -i 's#^GPAC_SH_FLAGS=.*#GPAC_SH_FLAGS=#' config.mak \
     && sed -i "s#^AR=.*#AR=$toolchain/bin/llvm-ar#" config.mak \
     && sed -i "s#^RANLIB=.*#RANLIB=$toolchain/bin/llvm-ranlib#" config.mak \
     && sed -i "s#^STRIP=.*#STRIP=$toolchain/bin/llvm-strip#" config.mak \
-    && sed -i "s#^GPAC_SH_FLAGS=.*#GPAC_SH_FLAGS=#" config.mak \
+    && sed -i -E '/^GPAC_SH_FLAGS=/ { s/(^| )-lpthread( |$)/ /g; s/(^| )-pthread( |$)/ /g; s/[[:space:]]+$//; s/= /=/; }' config.mak \
     && make -C src -j"$(nproc)" \
     && make -C applications/mp4box -j"$(nproc)" \
     && mkdir -p /opt/mp4box/bin \
