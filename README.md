@@ -1,6 +1,6 @@
 # wrapper-rs
 
-Rust rewrite of the original `main.c` / `main.cpp` flow for `x86_64-linux-android`.
+Rust rewrite of the original [wrapper](https://github.com/WorldObservationLog/wrapper) and [go-api](https://github.com/akinazuki/apple-music-downloader/blob/main/API.md) flow for `x86_64-linux-android`.
 
 ## Build
 
@@ -11,11 +11,6 @@ cargo ndk -t x86_64 build --release
 
 The release binary is `target/x86_64-linux-android/release/wrapper`.
 
-## Run
-
-```bash
-orb sudo ./wrapper
-```
 
 ## Control Protocol
 
