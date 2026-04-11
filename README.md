@@ -12,10 +12,16 @@ This repository currently ships two binaries:
 ### Android target
 
 ```bash
-cargo ndk -t x86_64 build --release
+ANDROID_NDK_HOME="/opt/homebrew/share/android-ndk" cargo ndk -t x86_64 build --release
 ```
 
 The release binary is `target/x86_64-linux-android/release/wrapper`.
+
+Canonical local build wrapper:
+
+```bash
+./scripts/build-android.sh
+```
 
 ### Host build (for local debug)
 

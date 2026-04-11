@@ -17,6 +17,18 @@ use runtime::AppState;
 pub async fn run_server_process() -> AppResult<()> {
     install_android_log_shim();
     let config = AppConfig::parse()?;
+    run_server(config).await
+}
+
+pub fn run_server_process_blocking(config: AppConfig) -> AppResult<()> {
+    install_android_log_shim();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run_server(config))
+}
+
+async fn run_server(config: AppConfig) -> AppResult<()> {
     crate::app_info!(
         "main",
         "parsed config: daemon_addr={}, decrypt_workers={}, decrypt_inflight={}, base_dir={}, library_dir={}, cache_dir={}, storefront={}, language={}",

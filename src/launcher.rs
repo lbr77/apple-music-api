@@ -1,16 +1,13 @@
-use std::ffi::{CString, OsStr};
+use std::ffi::CString;
 use std::fs::{self, OpenOptions};
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::ptr;
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
 
 const ROOTFS_DIR: &str = "./rootfs";
-const INNER_BINARY: &str = "/system/bin/main";
 const INNER_LINKER: &str = "/system/bin/linker64";
 const DEV_NULL: &str = "/dev/null";
 const DEV_URANDOM: &str = "/dev/urandom";
@@ -47,7 +44,6 @@ pub fn run_launcher() -> AppResult<i32> {
     ensure_dev_null()?;
     ensure_char_device(DEV_URANDOM, libc::makedev(0x1, 0x9), false)?;
     ensure_executable(INNER_LINKER)?;
-    ensure_executable(INNER_BINARY)?;
 
     if can_unshare_pid {
         unshare_pid_namespace()?;
@@ -64,7 +60,8 @@ pub fn run_launcher() -> AppResult<i32> {
 
 fn install_signal_handlers() -> AppResult<()> {
     for signal in [libc::SIGINT, libc::SIGTERM] {
-        let result = unsafe { libc::signal(signal, forward_signal as usize) };
+        let handler = forward_signal as *const () as usize;
+        let result = unsafe { libc::signal(signal, handler) };
         if result == libc::SIG_ERR {
             return Err(std::io::Error::last_os_error().into());
         }
@@ -161,52 +158,16 @@ fn fork_process() -> AppResult<i32> {
 fn run_child(config: &AppConfig) -> ! {
     let result = (|| -> AppResult<()> {
         fs::create_dir_all(config.base_dir.join("mpl_db"))?;
-        exec_inner_process()
+        crate::run_server_process_blocking(config.clone())
     })();
 
     match result {
-        Ok(()) => unreachable!("execve only returns on failure"),
+        Ok(()) => std::process::exit(0),
         Err(error) => {
             crate::app_error!("launcher", "failed to start child server: {error}");
             std::process::exit(1);
         }
     }
-}
-
-fn exec_inner_process() -> AppResult<()> {
-    let program = CString::new(INNER_BINARY).expect("static path does not contain NUL");
-    let args = std::env::args_os()
-        .map(|arg| cstring_from_os(&arg, "argv"))
-        .collect::<AppResult<Vec<_>>>()?;
-    let env = std::env::vars_os()
-        .map(|(key, value)| {
-            let mut pair = key;
-            pair.push("=");
-            pair.push(value);
-            cstring_from_os(&pair, "env")
-        })
-        .collect::<AppResult<Vec<_>>>()?;
-
-    let argv = into_ptrs(&args);
-    let envp = into_ptrs(&env);
-    unsafe {
-        libc::execve(program.as_ptr(), argv.as_ptr(), envp.as_ptr());
-    }
-    Err(std::io::Error::last_os_error().into())
-}
-
-fn cstring_from_os(value: &OsStr, context: &str) -> AppResult<CString> {
-    CString::new(value.as_bytes())
-        .map_err(|_| AppError::Message(format!("{context} contains interior NUL byte")))
-}
-
-fn into_ptrs(values: &[CString]) -> Vec<*const libc::c_char> {
-    let mut pointers = values
-        .iter()
-        .map(|value| value.as_ptr())
-        .collect::<Vec<_>>();
-    pointers.push(ptr::null());
-    pointers
 }
 
 fn wait_for_child(child_pid: i32) -> AppResult<i32> {
@@ -223,11 +184,11 @@ fn wait_for_child(child_pid: i32) -> AppResult<i32> {
         return Err(error.into());
     }
 
-    if unsafe { libc::WIFEXITED(status) } {
-        return Ok(unsafe { libc::WEXITSTATUS(status) });
+    if libc::WIFEXITED(status) {
+        return Ok(libc::WEXITSTATUS(status));
     }
-    if unsafe { libc::WIFSIGNALED(status) } {
-        return Ok(128 + unsafe { libc::WTERMSIG(status) });
+    if libc::WIFSIGNALED(status) {
+        return Ok(128 + libc::WTERMSIG(status));
     }
     Ok(1)
 }
