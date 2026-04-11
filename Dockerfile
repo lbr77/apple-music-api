@@ -17,14 +17,16 @@ FROM debian:bookworm-slim AS mp4box
 ARG GPAC_DEB_URL="https://download.tsi.telecom-paristech.fr/gpac/new_builds/gpac_latest_head_linux64.deb"
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl binutils tar xz-utils \
+    && apt-get install -y --no-install-recommends ca-certificates curl binutils tar xz-utils zstd \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /tmp/mp4box/linux-x64-unpacked /opt/mp4box/bin \
     && curl -fsSL "$GPAC_DEB_URL" -o /tmp/mp4box/linux-x64.deb \
     && cp /tmp/mp4box/linux-x64.deb /tmp/mp4box/linux-x64-unpacked/linux-x64.deb \
     && cd /tmp/mp4box/linux-x64-unpacked \
     && ar -x linux-x64.deb \
-    && tar -x --strip-components 1 -f data.tar.xz --wildcards '*/MP4Box' \
+    && data_archive="$(find . -maxdepth 1 -type f -name 'data.tar.*' | head -n 1)" \
+    && test -n "$data_archive" \
+    && tar -x --strip-components 1 -f "$data_archive" --wildcards '*/MP4Box' \
     && test -x usr/bin/MP4Box \
     && cp usr/bin/MP4Box /opt/mp4box/bin/MP4Box \
     && ln -s MP4Box /opt/mp4box/bin/mp4box \
