@@ -83,9 +83,6 @@ type FnPContextKdContext = unsafe extern "C" fn(*mut c_void) -> *mut *mut c_void
 type FnSharedPtrPContextDrop = unsafe extern "C" fn(*mut SharedPtr);
 type FnDecryptSample =
     unsafe extern "C" fn(*mut c_void, u32, *mut c_void, *mut c_void, usize) -> c_long;
-type FnRequestContextAccount = unsafe extern "C" fn(*mut SharedPtr, *mut c_void);
-type FnRequestContextAccountStore = unsafe extern "C" fn(*mut SharedPtr, *mut c_void);
-type FnAccountStoreSignOut = unsafe extern "C" fn(*mut c_void, *const SharedPtr, *const SharedPtr);
 type FnRequestContextStorefrontIdentifier =
     unsafe extern "C" fn(*mut StdString, *mut c_void, *const SharedPtr) -> *mut StdString;
 type FnRequestContextFairPlay = unsafe extern "C" fn(*mut SharedPtr, *mut c_void) -> *mut c_void;
@@ -182,9 +179,6 @@ pub struct NativeSymbols {
     pub pcontext_kd_context: FnPContextKdContext,
     pub shared_ptr_pcontext_drop: FnSharedPtrPContextDrop,
     pub decrypt_sample: FnDecryptSample,
-    pub request_context_account: FnRequestContextAccount,
-    pub request_context_account_store: FnRequestContextAccountStore,
-    pub account_store_sign_out: FnAccountStoreSignOut,
     pub request_context_storefront_identifier: FnRequestContextStorefrontIdentifier,
     pub request_context_fairplay: FnRequestContextFairPlay,
     pub fairplay_get_subscription_status: FnFairPlayGetSubscriptionStatus,
@@ -483,18 +477,6 @@ impl NativeSymbols {
                 FnSharedPtrPContextDrop
             ),
             decrypt_sample: load_symbol!("NfcRKVnxuKZy04KWbdFu71Ou", FnDecryptSample),
-            request_context_account: load_symbol!(
-                "_ZNK17storeservicescore14RequestContext7accountEv",
-                FnRequestContextAccount
-            ),
-            request_context_account_store: load_symbol!(
-                "_ZNK17storeservicescore14RequestContext12accountStoreEv",
-                FnRequestContextAccountStore
-            ),
-            account_store_sign_out: load_symbol!(
-                "_ZN17storeservicescore12AccountStore14signOutAccountERKNSt6__ndk110shared_ptrINS_7AccountEEERKNS2_INS_14RequestContextEEE",
-                FnAccountStoreSignOut
-            ),
             request_context_storefront_identifier: load_symbol!(
                 "_ZNK17storeservicescore14RequestContext20storeFrontIdentifierERKNSt6__ndk110shared_ptrINS_6URLBagEEE",
                 FnRequestContextStorefrontIdentifier

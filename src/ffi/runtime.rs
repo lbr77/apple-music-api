@@ -837,25 +837,15 @@ impl NativeSession {
             "logging out native account and clearing cache markers"
         );
         let _guard = self.session_lock.lock().expect("session lock poisoned");
-        let mut account = SharedPtr::default();
-        let mut account_store = SharedPtr::default();
-        unsafe {
-            (self.symbols.request_context_account)(&mut account, self.request_context.obj);
-            (self.symbols.request_context_account_store)(
-                &mut account_store,
-                self.request_context.obj,
-            );
-        }
-        if !account.is_null() && !account_store.is_null() {
-            crate::app_info!("ffi::session", "account store available, issuing sign-out");
-            unsafe {
-                (self.symbols.account_store_sign_out)(
-                    account_store.obj,
-                    &account,
-                    &self.request_context,
-                )
-            };
-        }
+
+        // `AccountStore::signOutAccount` crashes immediately in the headless daemon
+        // runtime during restored-session logout. The daemon only needs to drop its
+        // native session state and persistent restore markers so future boots do not
+        // recover the old account automatically.
+        crate::app_warn!(
+            "ffi::session",
+            "skipping native account-store sign-out; clearing local native session state only"
+        );
 
         unsafe {
             (self.symbols.session_ctrl_reset_all_contexts)(self.session_ctrl);
