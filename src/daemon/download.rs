@@ -7,9 +7,9 @@ use std::process::{Command, Output};
 use std::sync::LazyLock;
 
 use regex::Regex;
-use reqwest::Proxy;
 use reqwest::blocking::{Client, ClientBuilder};
 use reqwest::header::{AUTHORIZATION, ORIGIN, RANGE, REFERER};
+use reqwest::Proxy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -236,7 +236,6 @@ pub fn download_playback(
         &fragmented_path,
         &aac_path,
         &final_temp_path,
-        mp4box_available,
     )?;
     if mp4box_available {
         embed_mp4box_tags(
@@ -606,44 +605,21 @@ fn remux_output(
     fragmented_path: &Path,
     aac_path: &Path,
     final_path: &Path,
-    mp4box_available: bool,
 ) -> AppResult<()> {
-    // GPAC remuxes sanitized non-AAC fragmented MP4 more reliably than a blind ffmpeg copy,
-    // so prefer MP4Box only when it is actually runnable in the current environment.
-    let strategy = choose_remux_strategy(is_aac_variant, mp4box_available);
-    let output = match strategy {
-        RemuxStrategy::Ffmpeg => {
-            let input = if is_aac_variant {
-                aac_path
-            } else {
-                fragmented_path
-            };
-            let args = ffmpeg_remux_args(input, final_path);
-            run_binary("remux playback", FFMPEG_BINARY, &args)?
-        }
-        RemuxStrategy::Mp4Box => {
-            let args = mp4box_remux_args(fragmented_path, final_path);
-            run_binary("remux playback", MP4BOX_BINARY, &args)?
-        }
+    // Keep audio remux aligned with the upstream downloader: audio-only output is assembled
+    // once and then tagged in place, while MP4Box muxing remains reserved for MV-style
+    // multi-track assembly.
+    let input = if is_aac_variant {
+        aac_path
+    } else {
+        fragmented_path
     };
+    let args = ffmpeg_remux_args(input, final_path);
+    let output = run_binary("remux playback", FFMPEG_BINARY, &args)?;
     if !output.status.success() {
-        let (path, args) = match strategy {
-            RemuxStrategy::Ffmpeg => {
-                let input = if is_aac_variant {
-                    aac_path
-                } else {
-                    fragmented_path
-                };
-                (FFMPEG_BINARY, ffmpeg_remux_args(input, final_path))
-            }
-            RemuxStrategy::Mp4Box => (
-                MP4BOX_BINARY,
-                mp4box_remux_args(fragmented_path, final_path),
-            ),
-        };
         return Err(command_failure_error(
             "remux playback",
-            path,
+            FFMPEG_BINARY,
             &args,
             &output,
         ));
@@ -805,20 +781,6 @@ fn inspect_binary(path: &'static str) -> BinaryHealth {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RemuxStrategy {
-    Ffmpeg,
-    Mp4Box,
-}
-
-fn choose_remux_strategy(is_aac_variant: bool, mp4box_available: bool) -> RemuxStrategy {
-    if is_aac_variant || !mp4box_available {
-        RemuxStrategy::Ffmpeg
-    } else {
-        RemuxStrategy::Mp4Box
-    }
-}
-
 fn ffmpeg_remux_args(input: &Path, output: &Path) -> Vec<String> {
     vec![
         "-y".into(),
@@ -828,16 +790,6 @@ fn ffmpeg_remux_args(input: &Path, output: &Path) -> Vec<String> {
         input.to_string_lossy().into_owned(),
         "-c".into(),
         "copy".into(),
-        output.to_string_lossy().into_owned(),
-    ]
-}
-
-fn mp4box_remux_args(input: &Path, output: &Path) -> Vec<String> {
-    vec![
-        "-quiet".into(),
-        "-add".into(),
-        input.to_string_lossy().into_owned(),
-        "-new".into(),
         output.to_string_lossy().into_owned(),
     ]
 }

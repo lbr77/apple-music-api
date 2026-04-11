@@ -48,7 +48,7 @@ curl http://127.0.0.1:8080/health
 ```
 
 The daemon expects `ffmpeg`, `ffprobe`, and `MP4Box` at `/usr/local/bin`.
-Playback assembly uses `MP4Box` both for non-AAC remux and for the final `-itags` metadata pass.
+Playback assembly uses `ffmpeg` for audio remux and `MP4Box` for the final `-itags` metadata pass.
 
 ## Deployment
 
