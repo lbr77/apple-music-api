@@ -9,6 +9,8 @@ pub type AppResult<T> = Result<T, AppError>;
 pub enum AppError {
     #[error("{0}")]
     Message(String),
+    #[error("{0}")]
+    Command(String),
     #[error("io error: {0}")]
     Io(#[from] io::Error),
     #[error("json error: {0}")]

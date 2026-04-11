@@ -508,6 +508,7 @@ impl From<AppError> for ApiError {
                 state: None,
                 message,
             },
+            AppError::Command(message) => Self::internal(message),
             other => Self::internal(other.to_string()),
         }
     }

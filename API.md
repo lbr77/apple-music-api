@@ -8,7 +8,7 @@ Base URL: `http://localhost:<port>`
 
 Report daemon state and external media tool availability from the fixed `/usr/local/bin` runtime paths.
 
-`ffmpeg` and `ffprobe` are required for a healthy status. `MP4Box` is reported separately because playback remux prefers it for sanitized non-AAC fragmented MP4 output when available.
+`ffmpeg`, `ffprobe`, and `MP4Box` are all required for a healthy status. Playback uses `MP4Box` for the final `-itags` metadata pass, and also prefers it when remuxing sanitized non-AAC fragmented MP4 output.
 
 **Example**
 

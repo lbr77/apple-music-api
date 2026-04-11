@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{self, File};
+use std::io;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -228,12 +229,31 @@ pub fn download_playback(
     }
     fragmented.flush()?;
 
+    let mp4box_available = inspect_binary(MP4BOX_BINARY).available;
+
     remux_output(
         is_aac_variant,
         &fragmented_path,
         &aac_path,
         &final_temp_path,
+        mp4box_available,
     )?;
+    if mp4box_available {
+        embed_mp4box_tags(
+            &client,
+            &song_data.attributes,
+            album.attributes.as_ref(),
+            &album_dir,
+            &song_id,
+            &final_temp_path,
+        )?;
+    } else {
+        crate::app_warn!(
+            "daemon::download",
+            "skipping playback metadata tagging because {} is unavailable",
+            MP4BOX_BINARY
+        );
+    }
     fs::rename(&final_temp_path, &final_path)?;
 
     for path in [&fragmented_path, &aac_path, &init_probe_path] {
@@ -537,19 +557,22 @@ fn sanitized_variant_stem(variant_uri: &str) -> String {
 }
 
 fn probe_aac_stream(path: &Path) -> AppResult<(u32, u8)> {
-    let output = run_binary(
-        FFPROBE_BINARY,
-        &[
-            "-v".into(),
-            "error".into(),
-            "-show_streams".into(),
-            "-of".into(),
-            "json".into(),
-            path.to_string_lossy().into_owned(),
-        ],
-    )?;
+    let args = [
+        "-v".into(),
+        "error".into(),
+        "-show_streams".into(),
+        "-of".into(),
+        "json".into(),
+        path.to_string_lossy().into_owned(),
+    ];
+    let output = run_binary("probe AAC stream", FFPROBE_BINARY, &args)?;
     if !output.status.success() {
-        return Err(AppError::Message(command_output_message(&output)));
+        return Err(command_failure_error(
+            "probe AAC stream",
+            FFPROBE_BINARY,
+            &args,
+            &output,
+        ));
     }
     let json: Value = serde_json::from_slice(&output.stdout)?;
     let stream = json
@@ -583,10 +606,11 @@ fn remux_output(
     fragmented_path: &Path,
     aac_path: &Path,
     final_path: &Path,
+    mp4box_available: bool,
 ) -> AppResult<()> {
     // GPAC remuxes sanitized non-AAC fragmented MP4 more reliably than a blind ffmpeg copy,
-    // so prefer MP4Box when it is installed at the expected runtime path.
-    let strategy = choose_remux_strategy(is_aac_variant, Path::new(MP4BOX_BINARY).is_file());
+    // so prefer MP4Box only when it is actually runnable in the current environment.
+    let strategy = choose_remux_strategy(is_aac_variant, mp4box_available);
     let output = match strategy {
         RemuxStrategy::Ffmpeg => {
             let input = if is_aac_variant {
@@ -594,33 +618,144 @@ fn remux_output(
             } else {
                 fragmented_path
             };
-            run_binary(FFMPEG_BINARY, &ffmpeg_remux_args(input, final_path))?
+            let args = ffmpeg_remux_args(input, final_path);
+            run_binary("remux playback", FFMPEG_BINARY, &args)?
         }
-        RemuxStrategy::Mp4Box => run_binary(
-            MP4BOX_BINARY,
-            &mp4box_remux_args(fragmented_path, final_path),
-        )?,
+        RemuxStrategy::Mp4Box => {
+            let args = mp4box_remux_args(fragmented_path, final_path);
+            run_binary("remux playback", MP4BOX_BINARY, &args)?
+        }
     };
     if !output.status.success() {
-        return Err(AppError::Message(command_output_message(&output)));
+        let (path, args) = match strategy {
+            RemuxStrategy::Ffmpeg => {
+                let input = if is_aac_variant {
+                    aac_path
+                } else {
+                    fragmented_path
+                };
+                (FFMPEG_BINARY, ffmpeg_remux_args(input, final_path))
+            }
+            RemuxStrategy::Mp4Box => (
+                MP4BOX_BINARY,
+                mp4box_remux_args(fragmented_path, final_path),
+            ),
+        };
+        return Err(command_failure_error(
+            "remux playback",
+            path,
+            &args,
+            &output,
+        ));
     }
     Ok(())
 }
 
-fn detect_codec_label(path: &Path) -> AppResult<String> {
-    let output = run_binary(
-        FFPROBE_BINARY,
-        &[
-            "-v".into(),
-            "error".into(),
-            "-show_streams".into(),
-            "-of".into(),
-            "json".into(),
-            path.to_string_lossy().into_owned(),
-        ],
+fn embed_mp4box_tags(
+    client: &Client,
+    song: &SongAttributes,
+    album: Option<&AlbumAttributes>,
+    album_dir: &Path,
+    song_id: &str,
+    final_path: &Path,
+) -> AppResult<()> {
+    let cover_path = download_cover_artwork(client, song, album, album_dir, song_id)?;
+    let tags_path = album_dir.join(format!("{song_id}.itags.txt"));
+    fs::write(
+        &tags_path,
+        build_mp4box_tag_file(song, cover_path.as_deref()),
     )?;
+
+    let args = [
+        "-itags".into(),
+        tags_path.to_string_lossy().into_owned(),
+        final_path.to_string_lossy().into_owned(),
+    ];
+    let output = run_binary("embed MP4 tags", MP4BOX_BINARY, &args)?;
+
+    let _ = fs::remove_file(&tags_path);
+    if let Some(cover_path) = &cover_path {
+        let _ = fs::remove_file(cover_path);
+    }
+
     if !output.status.success() {
-        return Err(AppError::Message(command_output_message(&output)));
+        return Err(command_failure_error(
+            "embed MP4 tags",
+            MP4BOX_BINARY,
+            &args,
+            &output,
+        ));
+    }
+    Ok(())
+}
+
+fn download_cover_artwork(
+    client: &Client,
+    song: &SongAttributes,
+    album: Option<&AlbumAttributes>,
+    album_dir: &Path,
+    song_id: &str,
+) -> AppResult<Option<String>> {
+    let artwork = song
+        .artwork
+        .as_ref()
+        .or_else(|| album.and_then(|item| item.artwork.as_ref()));
+    let Some(artwork) = artwork else {
+        return Ok(None);
+    };
+
+    let cover_path = album_dir.join(format!("{song_id}.cover.jpg"));
+    let response = client
+        .get(artwork_url(artwork))
+        .send()?
+        .error_for_status()?;
+    fs::write(&cover_path, response.bytes()?.as_ref())?;
+    Ok(Some(cover_path.to_string_lossy().into_owned()))
+}
+
+fn artwork_url(artwork: &Artwork) -> String {
+    let width = artwork.width.unwrap_or(1200);
+    let height = artwork.height.unwrap_or(width);
+    artwork
+        .url
+        .replace("{w}", &width.to_string())
+        .replace("{h}", &height.to_string())
+}
+
+fn build_mp4box_tag_file(song: &SongAttributes, cover_path: Option<&str>) -> String {
+    let mut lines = vec![
+        "tool=".to_owned(),
+        format!("artist={}", song.artist_name),
+        format!("performer={}", song.artist_name),
+        format!("album_artist={}", song.artist_name),
+        format!("album={}", song.album_name),
+        format!("title={}", song.name),
+        format!("tracknum={}", song.track_number),
+        format!("disk={}", song.disc_number),
+    ];
+    if let Some(cover_path) = cover_path {
+        lines.push(format!("cover={cover_path}"));
+    }
+    lines.join("\n")
+}
+
+fn detect_codec_label(path: &Path) -> AppResult<String> {
+    let args = [
+        "-v".into(),
+        "error".into(),
+        "-show_streams".into(),
+        "-of".into(),
+        "json".into(),
+        path.to_string_lossy().into_owned(),
+    ];
+    let output = run_binary("detect output codec", FFPROBE_BINARY, &args)?;
+    if !output.status.success() {
+        return Err(command_failure_error(
+            "detect output codec",
+            FFPROBE_BINARY,
+            &args,
+            &output,
+        ));
     }
     let json: Value = serde_json::from_slice(&output.stdout)?;
     let codec = json
@@ -707,8 +842,13 @@ fn mp4box_remux_args(input: &Path, output: &Path) -> Vec<String> {
     ]
 }
 
-fn run_binary(path: &'static str, args: &[String]) -> AppResult<Output> {
-    Ok(Command::new(path).args(args).output()?)
+/// Include the command line in backend errors so missing runtime tools can be located
+/// from the HTTP response without shell access to the server.
+fn run_binary(stage: &'static str, path: &'static str, args: &[String]) -> AppResult<Output> {
+    Command::new(path)
+        .args(args)
+        .output()
+        .map_err(|error| command_spawn_error(stage, path, args, &error))
 }
 
 fn command_output_message(output: &Output) -> String {
@@ -719,6 +859,43 @@ fn command_output_message(output: &Output) -> String {
         .find(|line| !line.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| format!("process exited with status {}", output.status))
+}
+
+fn command_spawn_error(
+    stage: &'static str,
+    path: &'static str,
+    args: &[String],
+    error: &io::Error,
+) -> AppError {
+    AppError::Command(format!(
+        "{stage} failed to spawn {}: {error}",
+        command_invocation(path, args),
+    ))
+}
+
+fn command_failure_error(
+    stage: &'static str,
+    path: &'static str,
+    args: &[String],
+    output: &Output,
+) -> AppError {
+    AppError::Command(format!(
+        "{stage} failed: {}: {}",
+        command_invocation(path, args),
+        command_output_message(output),
+    ))
+}
+
+fn command_invocation(path: &str, args: &[String]) -> String {
+    if args.is_empty() {
+        return path.to_owned();
+    }
+    let rendered_args = args
+        .iter()
+        .map(|arg| format!("{arg:?}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{path} {rendered_args}")
 }
 
 #[derive(Debug)]
@@ -783,7 +960,12 @@ struct SongAttributes {
     artist_name: String,
     #[serde(rename = "albumName")]
     album_name: String,
+    #[serde(rename = "trackNumber")]
+    track_number: u32,
+    #[serde(rename = "discNumber")]
+    disc_number: u32,
     name: String,
+    artwork: Option<Artwork>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -805,4 +987,149 @@ struct ArtistData {
 #[derive(Debug, Deserialize)]
 struct AlbumData {
     id: String,
+    attributes: Option<AlbumAttributes>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AlbumAttributes {
+    artwork: Option<Artwork>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Artwork {
+    url: String,
+    width: Option<u32>,
+    height: Option<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        Artwork, BinaryHealth, RemuxStrategy, SongAttributes, ToolHealthReport,
+        build_mp4box_tag_file, choose_remux_strategy, command_spawn_error, ffmpeg_remux_args,
+        mp4box_remux_args,
+    };
+    use std::io;
+    use std::path::Path;
+
+    #[test]
+    fn prefers_mp4box_for_non_aac_when_available() {
+        assert_eq!(choose_remux_strategy(false, true), RemuxStrategy::Mp4Box);
+        assert_eq!(choose_remux_strategy(true, true), RemuxStrategy::Ffmpeg);
+        assert_eq!(choose_remux_strategy(false, false), RemuxStrategy::Ffmpeg);
+    }
+
+    #[test]
+    fn builds_ffmpeg_copy_remux_args() {
+        assert_eq!(
+            ffmpeg_remux_args(Path::new("/tmp/input.aac"), Path::new("/tmp/output.m4a")),
+            vec![
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                "/tmp/input.aac",
+                "-c",
+                "copy",
+                "/tmp/output.m4a",
+            ]
+        );
+    }
+
+    #[test]
+    fn builds_mp4box_remux_args() {
+        assert_eq!(
+            mp4box_remux_args(
+                Path::new("/tmp/input.frag.m4a"),
+                Path::new("/tmp/output.m4a")
+            ),
+            vec![
+                "-quiet",
+                "-add",
+                "/tmp/input.frag.m4a",
+                "-new",
+                "/tmp/output.m4a"
+            ]
+        );
+    }
+
+    #[test]
+    fn builds_mp4box_tag_file_with_cover() {
+        let song = SongAttributes {
+            artist_name: "Artist".into(),
+            album_name: "Album".into(),
+            track_number: 3,
+            disc_number: 1,
+            name: "Title".into(),
+            artwork: Some(Artwork {
+                url: "https://example.com/{w}x{h}.jpg".into(),
+                width: Some(1200),
+                height: Some(1200),
+            }),
+        };
+
+        assert_eq!(
+            build_mp4box_tag_file(&song, Some("/tmp/cover.jpg")),
+            [
+                "tool=",
+                "artist=Artist",
+                "performer=Artist",
+                "album_artist=Artist",
+                "album=Album",
+                "title=Title",
+                "tracknum=3",
+                "disk=1",
+                "cover=/tmp/cover.jpg",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn reports_command_spawn_context() {
+        let error = command_spawn_error(
+            "embed MP4 tags",
+            "/usr/local/bin/MP4Box",
+            &[
+                "-itags".into(),
+                "/tmp/song.itags.txt".into(),
+                "/tmp/song.m4a".into(),
+            ],
+            &io::Error::new(io::ErrorKind::NotFound, "No such file or directory"),
+        );
+
+        assert_eq!(
+            error.to_string(),
+            "embed MP4 tags failed to spawn /usr/local/bin/MP4Box \"-itags\" \"/tmp/song.itags.txt\" \"/tmp/song.m4a\": No such file or directory"
+        );
+    }
+
+    #[test]
+    fn health_only_requires_ffmpeg_and_ffprobe() {
+        let unavailable_mp4box = BinaryHealth {
+            path: "/usr/local/bin/MP4Box",
+            available: false,
+            version: None,
+            error: Some("No such file or directory (os error 2)".into()),
+        };
+
+        assert!(
+            ToolHealthReport {
+                ffmpeg: BinaryHealth {
+                    path: "/usr/local/bin/ffmpeg",
+                    available: true,
+                    version: None,
+                    error: None,
+                },
+                ffprobe: BinaryHealth {
+                    path: "/usr/local/bin/ffprobe",
+                    available: true,
+                    version: None,
+                    error: None,
+                },
+                mp4box: unavailable_mp4box,
+            }
+            .is_healthy()
+        );
+    }
 }
