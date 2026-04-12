@@ -400,19 +400,36 @@ impl AppleApiClient {
         &self,
         storefront: &str,
         language: Option<&str>,
-        dev_token: &str,
         music_token: &str,
         song_id: &str,
     ) -> ApiResult<String> {
-        let response = self
+        let web_token = self.web_token(false).await?;
+        let result = self
             .catalog_json(
                 format!("/v1/catalog/{storefront}/songs/{song_id}/lyrics"),
                 language,
-                dev_token,
+                &web_token,
                 Some(music_token),
                 &[("extend", "ttmlLocalizations".into())],
             )
-            .await?;
+            .await;
+        let response = if let Err(AppleMusicApiError::UpstreamHttp { status, .. }) = &result
+            && matches!(
+                *status,
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+            ) {
+            let refreshed_web_token = self.web_token(true).await?;
+            self.catalog_json(
+                format!("/v1/catalog/{storefront}/songs/{song_id}/lyrics"),
+                language,
+                &refreshed_web_token,
+                Some(music_token),
+                &[("extend", "ttmlLocalizations".into())],
+            )
+            .await?
+        } else {
+            result?
+        };
         let ttml = response
             .pointer("/data/0/attributes/ttml")
             .and_then(Value::as_str)

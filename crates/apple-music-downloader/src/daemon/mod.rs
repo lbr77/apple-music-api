@@ -1,3 +1,5 @@
+mod subsonic;
+
 use std::sync::Arc;
 
 use apple_music_api::{
@@ -25,7 +27,7 @@ use crate::error::{AppError, AppResult};
 use crate::runtime::AppState;
 
 #[derive(Clone)]
-struct DaemonContext {
+pub(crate) struct DaemonContext {
     config: AppConfig,
     platform: Arc<NativePlatform>,
     state: Arc<AppState>,
@@ -33,7 +35,7 @@ struct DaemonContext {
 }
 
 impl DaemonContext {
-    fn new(
+    pub(crate) fn new(
         config: AppConfig,
         platform: Arc<NativePlatform>,
         state: Arc<AppState>,
@@ -46,20 +48,28 @@ impl DaemonContext {
         })
     }
 
-    fn session(&self) -> AppResult<Arc<SessionRuntime>> {
+    pub(crate) fn session(&self) -> AppResult<Arc<SessionRuntime>> {
         self.state.session().ok_or(AppError::NoActiveSession)
     }
 
-    fn default_storefront(&self) -> &str {
+    pub(crate) fn default_storefront(&self) -> &str {
         &self.config.storefront
     }
 
-    fn default_language(&self) -> Option<&str> {
+    pub(crate) fn default_language(&self) -> Option<&str> {
         (!self.config.language.is_empty()).then_some(self.config.language.as_str())
     }
 
-    fn api_token(&self) -> &str {
+    pub(crate) fn api_token(&self) -> &str {
         &self.config.api_token
+    }
+
+    pub(crate) fn subsonic_username(&self) -> &str {
+        &self.config.subsonic_username
+    }
+
+    pub(crate) fn subsonic_password(&self) -> &str {
+        &self.config.subsonic_password
     }
 }
 
@@ -72,7 +82,7 @@ pub async fn run_daemon_server(
     std::fs::create_dir_all(config.cache_dir.join("albums"))?;
 
     let context = Arc::new(DaemonContext::new(config.clone(), platform, state)?);
-    let app = Router::new()
+    let legacy_routes = Router::new()
         .route("/health", get(health_handler))
         .route("/status", get(status_handler))
         .route("/login", post(login_handler))
@@ -90,7 +100,10 @@ pub async fn run_daemon_server(
         .layer(middleware::from_fn_with_state(
             Arc::clone(&context),
             require_bearer_auth,
-        ))
+        ));
+    let app = Router::new()
+        .merge(legacy_routes)
+        .merge(subsonic::router(Arc::clone(&context)))
         .with_state(context);
 
     let listener = tokio::net::TcpListener::bind(config.daemon_addr()).await?;
@@ -478,7 +491,6 @@ async fn lyrics_handler(
         .lyrics(
             storefront,
             context.default_language(),
-            &profile.dev_token,
             &profile.music_token,
             &song_id,
         )
@@ -514,7 +526,6 @@ async fn playback_handler(
         .lyrics(
             &storefront,
             context.default_language(),
-            &profile.dev_token,
             &profile.music_token,
             &song_id,
         )

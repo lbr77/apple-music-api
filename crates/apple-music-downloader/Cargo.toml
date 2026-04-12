@@ -12,10 +12,14 @@ apple-music-api = { path = "../apple-music-api" }
 apple-music-decryptor = { path = "../apple-music-decryptor" }
 axum.workspace = true
 clap.workspace = true
+hex.workspace = true
+md5.workspace = true
 num_cpus.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_urlencoded.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tower.workspace = true
 tower-http.workspace = true

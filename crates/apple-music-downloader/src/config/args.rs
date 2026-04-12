@@ -1,5 +1,6 @@
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::{env, ffi::OsString};
 
 use apple_music_decryptor::{DeviceInfo, DownloadConfig, NativePlatformConfig};
 use clap::Parser;
@@ -9,12 +10,18 @@ use crate::error::{AppError, AppResult};
 const DEFAULT_DEVICE_INFO: &str =
     "Music/4.9/Android/10/Samsung S9/7663313/en-US/en-US/dc28071e981c439e";
 const DEFAULT_BASE_DIR: &str = "/data/data/com.apple.android.music/files";
+const DEFAULT_SUBSONIC_USERNAME: &str = "admin";
+const DEFAULT_SUBSONIC_PASSWORD: &str = "admin123";
+const SUBSONIC_USERNAME_ENV: &str = "WRAPPER_SUBSONIC_USERNAME";
+const SUBSONIC_PASSWORD_ENV: &str = "WRAPPER_SUBSONIC_PASSWORD";
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub host: IpAddr,
     pub daemon_port: u16,
     pub api_token: String,
+    pub subsonic_username: String,
+    pub subsonic_password: String,
     pub proxy: Option<String>,
     pub base_dir: PathBuf,
     pub library_dir: PathBuf,
@@ -70,6 +77,14 @@ impl AppConfig {
             host: args.host,
             daemon_port: args.daemon_port,
             api_token: normalize_api_token(args.api_token)?,
+            subsonic_username: normalize_subsonic_username(read_env_with_default(
+                SUBSONIC_USERNAME_ENV,
+                DEFAULT_SUBSONIC_USERNAME,
+            ))?,
+            subsonic_password: normalize_subsonic_password(read_env_with_default(
+                SUBSONIC_PASSWORD_ENV,
+                DEFAULT_SUBSONIC_PASSWORD,
+            ))?,
             proxy: args.proxy,
             base_dir: args.base_dir,
             library_dir: resolve_library_dir(args.library_dir)?,
@@ -143,4 +158,34 @@ fn normalize_api_token(api_token: String) -> AppResult<String> {
     } else {
         Ok(api_token)
     }
+}
+
+fn normalize_subsonic_username(username: String) -> AppResult<String> {
+    let username = username.trim().to_owned();
+    if username.is_empty() {
+        Err(AppError::Message(format!(
+            "subsonic username cannot be empty; set {SUBSONIC_USERNAME_ENV}",
+        )))
+    } else {
+        Ok(username)
+    }
+}
+
+fn normalize_subsonic_password(password: String) -> AppResult<String> {
+    let password = password.trim().to_owned();
+    if password.is_empty() {
+        Err(AppError::Message(format!(
+            "subsonic password cannot be empty; set {SUBSONIC_PASSWORD_ENV}",
+        )))
+    } else {
+        Ok(password)
+    }
+}
+
+fn read_env_with_default(name: &str, default_value: &str) -> String {
+    env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| OsString::from(default_value))
+        .to_string_lossy()
+        .into_owned()
 }

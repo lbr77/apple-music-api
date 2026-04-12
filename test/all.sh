@@ -2,17 +2,26 @@
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:8080}"
+API_BEARER_TOKEN="${API_BEARER_TOKEN:-}"
 APPLE_USERNAME="${APPLE_USERNAME:-}"
 APPLE_PASSWORD="${APPLE_PASSWORD:-}"
 APPLE_2FA="${APPLE_2FA:-}"
 SEARCH_KEYWORD="${SEARCH_KEYWORD:-Taylor Swift}"
 DOWNLOAD_CODEC="${DOWNLOAD_CODEC:-alac}"
 
-if [ -z "$APPLE_USERNAME" ] || [ -z "$APPLE_PASSWORD" ]; then
-	echo "ERROR: APPLE_USERNAME and APPLE_PASSWORD are required."
-	echo "Example: APPLE_USERNAME='apple@example.com' APPLE_PASSWORD='secret' $0"
+if [ -z "$API_BEARER_TOKEN" ]; then
+	echo "ERROR: API_BEARER_TOKEN is required."
+	echo "Example: API_BEARER_TOKEN='local-dev-token' $0"
 	exit 1
 fi
+
+if [ -z "$APPLE_USERNAME" ] || [ -z "$APPLE_PASSWORD" ]; then
+	echo "ERROR: APPLE_USERNAME and APPLE_PASSWORD are required."
+	echo "Example: API_BEARER_TOKEN='local-dev-token' APPLE_USERNAME='apple@example.com' APPLE_PASSWORD='secret' $0"
+	exit 1
+fi
+
+CURL_AUTH_ARGS=(-H "Authorization: Bearer $API_BEARER_TOKEN")
 
 require_cmd() {
 	if ! command -v "$1" >/dev/null 2>&1; then
@@ -30,6 +39,7 @@ json_post() {
 	local outfile="$3"
 	curl -sS -o "$outfile" -w "%{http_code}" \
 		-X POST "$BASE_URL$endpoint" \
+		"${CURL_AUTH_ARGS[@]}" \
 		-H "content-type: application/json" \
 		-d "$body"
 }
@@ -37,7 +47,7 @@ json_post() {
 json_get() {
 	local endpoint="$1"
 	local outfile="$2"
-	curl -sS -o "$outfile" -w "%{http_code}" "$BASE_URL$endpoint"
+	curl -sS -o "$outfile" -w "%{http_code}" "${CURL_AUTH_ARGS[@]}" "$BASE_URL$endpoint"
 }
 
 assert_json_field_eq() {
@@ -58,8 +68,8 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
 echo "==> reset stale auth state"
-curl -sS -X POST "$BASE_URL/login/reset" -o /dev/null || true
-curl -sS -X POST "$BASE_URL/logout" -o /dev/null || true
+curl -sS -X POST "${CURL_AUTH_ARGS[@]}" "$BASE_URL/login/reset" -o /dev/null || true
+curl -sS -X POST "${CURL_AUTH_ARGS[@]}" "$BASE_URL/logout" -o /dev/null || true
 
 echo "==> login"
 login_json="$tmpdir/login.json"
@@ -168,7 +178,7 @@ fi
 echo "    playback path: $playback_path"
 echo "    playback size: $playback_size"
 
-if ! curl -sS -f -r 0-0 -o /dev/null "$BASE_URL/$playback_path"; then
+if ! curl -sS -f -r 0-0 "${CURL_AUTH_ARGS[@]}" -o /dev/null "$BASE_URL/$playback_path"; then
 	echo "ERROR: cached playback file is not reachable: $BASE_URL/$playback_path"
 	exit 1
 fi
