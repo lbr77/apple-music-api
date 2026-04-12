@@ -11,7 +11,6 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use md5::Digest;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -412,12 +411,19 @@ async fn get_artist_handler(
         album_count: Some(albums.len()),
     };
     Ok(match format {
-        ResponseFormat::Json => subsonic_ok_json(json!({
-            "artist": {
-                **artist_json(&payload_artist).as_object().expect("artist json object"),
-                "album": albums.iter().map(album_json).collect::<Vec<_>>(),
-            }
-        })),
+        ResponseFormat::Json => {
+            let mut artist_value = artist_json(&payload_artist)
+                .as_object()
+                .expect("artist json object")
+                .clone();
+            artist_value.insert(
+                "album".into(),
+                Value::Array(albums.iter().map(album_json).collect::<Vec<_>>()),
+            );
+            subsonic_ok_json(json!({
+                "artist": Value::Object(artist_value)
+            }))
+        }
         ResponseFormat::Xml => {
             let album_xml = albums.iter().map(album_xml).collect::<String>();
             subsonic_ok_xml(&format!(
@@ -458,12 +464,19 @@ async fn get_album_handler(
     album_summary.song_count = Some(songs.len());
 
     Ok(match format {
-        ResponseFormat::Json => subsonic_ok_json(json!({
-            "album": {
-                **album_json(&album_summary).as_object().expect("album json object"),
-                "song": songs.iter().map(song_json).collect::<Vec<_>>(),
-            }
-        })),
+        ResponseFormat::Json => {
+            let mut album_value = album_json(&album_summary)
+                .as_object()
+                .expect("album json object")
+                .clone();
+            album_value.insert(
+                "song".into(),
+                Value::Array(songs.iter().map(song_json).collect::<Vec<_>>()),
+            );
+            subsonic_ok_json(json!({
+                "album": Value::Object(album_value)
+            }))
+        }
         ResponseFormat::Xml => {
             let songs_xml = songs.iter().map(song_xml).collect::<String>();
             subsonic_ok_xml(&format!(
@@ -606,17 +619,14 @@ async fn stream_handler(
         .map_err(|error| map_app_error(format, error.into()))?;
     let lyrics = load_lyrics_optional(&context, &query.id).await;
     let config = context.config.download_config();
+    let selected_codec = requested_codec(query.max_bit_rate, query.format.as_deref(), format)?;
     let playback = tokio::task::spawn_blocking(move || {
         download_playback(
             config,
             session,
             PlaybackRequest {
                 metadata: playback_track_metadata(metadata, lyrics),
-                requested_codec: requested_codec(
-                    query.max_bit_rate,
-                    query.format.as_deref(),
-                    format,
-                )?,
+                requested_codec: selected_codec,
             },
         )
     })
@@ -633,6 +643,7 @@ async fn stream_handler(
     ServeFile::new(file_path)
         .oneshot(request)
         .await
+        .map(|response| response.map(axum::body::Body::new))
         .map_err(|error| SubsonicError::generic(format, error.to_string()))
 }
 
@@ -683,7 +694,10 @@ fn validate_auth(context: &DaemonContext, query: &AuthQuery) -> Result<(), Subso
     }
 
     let authenticated = if let Some(password) = query.p.as_deref() {
-        decode_password(password).as_deref() == Ok(context.subsonic_password())
+        match decode_password(password) {
+            Ok(decoded) => decoded == context.subsonic_password(),
+            Err(error) => return Err(error),
+        }
     } else if let (Some(token), Some(salt)) = (query.t.as_deref(), query.s.as_deref()) {
         let digest = md5::compute(format!("{}{}", context.subsonic_password(), salt));
         format!("{:x}", digest) == token.to_ascii_lowercase()
@@ -937,7 +951,6 @@ async fn load_lyrics(
         .lyrics(
             context.default_storefront(),
             context.default_language(),
-            &profile.dev_token,
             &profile.music_token,
             song_id,
         )
@@ -953,7 +966,6 @@ async fn load_lyrics_optional(context: &DaemonContext, song_id: &str) -> Option<
         .lyrics(
             context.default_storefront(),
             context.default_language(),
-            &profile.dev_token,
             &profile.music_token,
             song_id,
         )
