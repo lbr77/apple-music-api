@@ -482,6 +482,11 @@ async fn lyrics_handler(
 
     let session = context.session()?;
     let profile = session.account_profile();
+    let lyrics_music_token = context
+        .config
+        .media_user_token
+        .as_deref()
+        .unwrap_or(&profile.music_token);
     let storefront = params
         .storefront
         .as_deref()
@@ -491,7 +496,7 @@ async fn lyrics_handler(
         .lyrics(
             storefront,
             context.default_language(),
-            &profile.music_token,
+            lyrics_music_token,
             &song_id,
         )
         .await?;
@@ -507,6 +512,11 @@ async fn playback_handler(
 ) -> Result<Response, ApiError> {
     let session = context.session()?;
     let profile = session.account_profile();
+    let lyrics_music_token = context
+        .config
+        .media_user_token
+        .as_deref()
+        .unwrap_or(&profile.music_token);
     let storefront = params
         .storefront
         .clone()
@@ -526,7 +536,7 @@ async fn playback_handler(
         .lyrics(
             &storefront,
             context.default_language(),
-            &profile.music_token,
+            lyrics_music_token,
             &song_id,
         )
         .await

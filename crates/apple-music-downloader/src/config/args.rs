@@ -12,6 +12,7 @@ const DEFAULT_DEVICE_INFO: &str =
 const DEFAULT_BASE_DIR: &str = "/data/data/com.apple.android.music/files";
 const DEFAULT_SUBSONIC_USERNAME: &str = "admin";
 const DEFAULT_SUBSONIC_PASSWORD: &str = "admin123";
+const MEDIA_USER_TOKEN_ENV: &str = "WRAPPER_MEDIA_USER_TOKEN";
 const SUBSONIC_USERNAME_ENV: &str = "WRAPPER_SUBSONIC_USERNAME";
 const SUBSONIC_PASSWORD_ENV: &str = "WRAPPER_SUBSONIC_PASSWORD";
 
@@ -20,6 +21,7 @@ pub struct AppConfig {
     pub host: IpAddr,
     pub daemon_port: u16,
     pub api_token: String,
+    pub media_user_token: Option<String>,
     pub subsonic_username: String,
     pub subsonic_password: String,
     pub proxy: Option<String>,
@@ -42,6 +44,8 @@ struct Args {
     daemon_port: u16,
     #[arg(long = "api-token")]
     api_token: String,
+    #[arg(long = "media-user-token")]
+    media_user_token: Option<String>,
     #[arg(short = 'P', long = "proxy")]
     proxy: Option<String>,
     #[arg(short = 'B', long = "base-dir", default_value = DEFAULT_BASE_DIR)]
@@ -77,6 +81,10 @@ impl AppConfig {
             host: args.host,
             daemon_port: args.daemon_port,
             api_token: normalize_api_token(args.api_token)?,
+            media_user_token: normalize_optional_token(
+                args.media_user_token
+                    .or_else(|| env::var(MEDIA_USER_TOKEN_ENV).ok()),
+            ),
             subsonic_username: normalize_subsonic_username(read_env_with_default(
                 SUBSONIC_USERNAME_ENV,
                 DEFAULT_SUBSONIC_USERNAME,
@@ -158,6 +166,13 @@ fn normalize_api_token(api_token: String) -> AppResult<String> {
     } else {
         Ok(api_token)
     }
+}
+
+fn normalize_optional_token(token: Option<String>) -> Option<String> {
+    token.and_then(|value| {
+        let value = value.trim().to_owned();
+        (!value.is_empty()).then_some(value)
+    })
 }
 
 fn normalize_subsonic_username(username: String) -> AppResult<String> {
