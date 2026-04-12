@@ -4,9 +4,10 @@ pub(crate) mod mp4;
 
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
-use axum::http::header::{HeaderValue, RETRY_AFTER};
+use axum::http::header::{AUTHORIZATION, HeaderValue, RETRY_AFTER, WWW_AUTHENTICATE};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -55,6 +56,10 @@ impl DaemonContext {
     fn default_language(&self) -> Option<&str> {
         (!self.config.language.is_empty()).then_some(self.config.language.as_str())
     }
+
+    fn api_token(&self) -> &str {
+        &self.config.api_token
+    }
 }
 
 pub async fn run_daemon_server(
@@ -79,6 +84,10 @@ pub async fn run_daemon_server(
         .route("/lyrics/{id}", get(lyrics_handler))
         .route("/playback/{id}", get(playback_handler))
         .nest_service("/cache", ServeDir::new(config.cache_dir.clone()))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&context),
+            require_bearer_auth,
+        ))
         .with_state(context);
 
     let listener = tokio::net::TcpListener::bind(config.daemon_addr()).await?;
@@ -448,6 +457,33 @@ async fn playback_handler(
     Ok(Json(playback_response(playback)).into_response())
 }
 
+async fn require_bearer_auth(
+    State(context): State<Arc<DaemonContext>>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let path = request.uri().path().to_owned();
+    let Some(header) = request.headers().get(AUTHORIZATION) else {
+        return Err(ApiError::unauthorized(&path, "missing bearer token"));
+    };
+    let Ok(header) = header.to_str() else {
+        return Err(ApiError::unauthorized(
+            &path,
+            "invalid authorization header encoding",
+        ));
+    };
+    let Some(token) = header.strip_prefix("Bearer ") else {
+        return Err(ApiError::unauthorized(
+            &path,
+            "authorization header must use Bearer",
+        ));
+    };
+    if token != context.api_token() {
+        return Err(ApiError::unauthorized(&path, "invalid bearer token"));
+    }
+    Ok(next.run(request).await)
+}
+
 fn playback_response(playback: PlaybackOutput) -> serde_json::Value {
     json!({
         "playbackUrl": playback.relative_path,
@@ -466,6 +502,7 @@ struct ApiError {
     state: Option<&'static str>,
     message: String,
     retry_after: Option<String>,
+    www_authenticate: Option<&'static str>,
 }
 
 impl ApiError {
@@ -475,6 +512,7 @@ impl ApiError {
             state: None,
             message: message.into(),
             retry_after: None,
+            www_authenticate: None,
         }
     }
 
@@ -484,6 +522,7 @@ impl ApiError {
             state: Some(state),
             message: message.into(),
             retry_after: None,
+            www_authenticate: None,
         }
     }
 
@@ -493,6 +532,17 @@ impl ApiError {
             state: None,
             message: message.into(),
             retry_after: None,
+            www_authenticate: None,
+        }
+    }
+
+    fn unauthorized(path: &str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            state: None,
+            message: format!("unauthorized for {path}: {}", message.into()),
+            retry_after: None,
+            www_authenticate: Some("Bearer"),
         }
     }
 }
@@ -505,6 +555,7 @@ impl From<AppError> for ApiError {
                 state: Some("logged_out"),
                 message: "no active session".into(),
                 retry_after: None,
+                www_authenticate: None,
             },
             AppError::Protocol(message)
             | AppError::InvalidDeviceInfo(message)
@@ -514,6 +565,7 @@ impl From<AppError> for ApiError {
                 state: None,
                 message,
                 retry_after: None,
+                www_authenticate: None,
             },
             AppError::UpstreamHttp {
                 status,
@@ -524,6 +576,7 @@ impl From<AppError> for ApiError {
                 state: None,
                 message,
                 retry_after,
+                www_authenticate: None,
             },
             AppError::Command(message) => Self::internal(message),
             other => Self::internal(other.to_string()),
@@ -552,6 +605,11 @@ impl IntoResponse for ApiError {
             && let Ok(value) = HeaderValue::from_str(retry_after)
         {
             response.headers_mut().insert(RETRY_AFTER, value);
+        }
+        if let Some(www_authenticate) = self.www_authenticate
+            && let Ok(value) = HeaderValue::from_str(www_authenticate)
+        {
+            response.headers_mut().insert(WWW_AUTHENTICATE, value);
         }
         response
     }
@@ -611,6 +669,19 @@ mod tests {
                 .get(axum::http::header::RETRY_AFTER)
                 .expect("retry-after header"),
             "3"
+        );
+    }
+
+    #[test]
+    fn unauthorized_errors_set_www_authenticate_header() {
+        let response = ApiError::unauthorized("/search", "missing bearer token").into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::WWW_AUTHENTICATE)
+                .expect("www-authenticate header"),
+            "Bearer"
         );
     }
 }

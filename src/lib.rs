@@ -30,8 +30,9 @@ pub fn run_server_process_blocking(config: AppConfig) -> AppResult<()> {
 async fn run_server(config: AppConfig) -> AppResult<()> {
     crate::app_info!(
         "main",
-        "parsed config: daemon_addr={}, decrypt_workers={}, decrypt_inflight={}, base_dir={}, library_dir={}, cache_dir={}, storefront={}, language={}",
+        "parsed config: daemon_addr={}, api_auth_enabled={}, decrypt_workers={}, decrypt_inflight={}, base_dir={}, library_dir={}, cache_dir={}, storefront={}, language={}",
         config.daemon_addr(),
+        !config.api_token.is_empty(),
         config.decrypt_workers,
         config.decrypt_inflight,
         config.base_dir.display(),

@@ -15,6 +15,7 @@ const DEFAULT_BASE_DIR: &str = "/data/data/com.apple.android.music/files";
 pub struct AppConfig {
     pub host: IpAddr,
     pub daemon_port: u16,
+    pub api_token: String,
     pub proxy: Option<String>,
     pub base_dir: PathBuf,
     pub library_dir: PathBuf,
@@ -33,6 +34,8 @@ struct Args {
     host: IpAddr,
     #[arg(long = "daemon-port", default_value_t = 8080)]
     daemon_port: u16,
+    #[arg(long = "api-token")]
+    api_token: String,
     #[arg(short = 'P', long = "proxy")]
     proxy: Option<String>,
     #[arg(short = 'B', long = "base-dir", default_value = DEFAULT_BASE_DIR)]
@@ -67,6 +70,7 @@ impl AppConfig {
         Ok(Self {
             host: args.host,
             daemon_port: args.daemon_port,
+            api_token: normalize_api_token(args.api_token)?,
             proxy: args.proxy,
             base_dir: args.base_dir,
             library_dir: resolve_library_dir(args.library_dir)?,
@@ -112,5 +116,16 @@ fn normalize_storefront(storefront: String) -> String {
         storefront
     } else {
         "us".into()
+    }
+}
+
+fn normalize_api_token(api_token: String) -> AppResult<String> {
+    let api_token = api_token.trim().to_owned();
+    if api_token.is_empty() {
+        Err(AppError::Message(
+            "api token cannot be empty; pass --api-token".into(),
+        ))
+    } else {
+        Ok(api_token)
     }
 }

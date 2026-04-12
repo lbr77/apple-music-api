@@ -2,6 +2,8 @@
 
 Base URL: `http://localhost:<port>`
 
+All endpoints require `Authorization: Bearer <api-token>`.
+
 ---
 
 ## GET /health
@@ -13,7 +15,7 @@ Report daemon state and external media tool availability from the fixed `/usr/lo
 **Example**
 
 ```bash
-curl "http://localhost:8080/health"
+curl -H "Authorization: Bearer <api-token>" "http://localhost:8080/health"
 ```
 
 ```json
@@ -44,7 +46,7 @@ Search for songs, albums, or artists.
 **Example**
 
 ```bash
-curl "http://localhost:8080/search?query=IOSYS&type=album&limit=2"
+curl -H "Authorization: Bearer <api-token>" "http://localhost:8080/search?query=IOSYS&type=album&limit=2"
 ```
 
 ```json
@@ -93,7 +95,7 @@ Fetch album metadata and full track list.
 **Example**
 
 ```bash
-curl "http://localhost:8080/album/1480785394"
+curl -H "Authorization: Bearer <api-token>" "http://localhost:8080/album/1480785394"
 ```
 
 ```json
@@ -192,7 +194,7 @@ Fetch song metadata.
 **Example**
 
 ```bash
-curl "http://localhost:8080/song/1480785411"
+curl -H "Authorization: Bearer <api-token>" "http://localhost:8080/song/1480785411"
 ```
 
 ```json
@@ -255,7 +257,7 @@ The file is cached at `./cache/albums/<albumId>/<songId>.m4a`.
 **Example**
 
 ```bash
-curl "http://localhost:8080/playback/1480785411"
+curl -H "Authorization: Bearer <api-token>" "http://localhost:8080/playback/1480785411"
 ```
 
 ```json
@@ -274,7 +276,7 @@ curl "http://localhost:8080/playback/1480785411"
 With redirect:
 
 ```bash
-curl -L "http://localhost:8080/playback/1480785411?redirect=true"
+curl -L -H "Authorization: Bearer <api-token>" "http://localhost:8080/playback/1480785411?redirect=true"
 # 302 → /cache/albums/1480785394/1480785411.m4a
 ```
 
@@ -299,7 +301,7 @@ Fetch lyrics for a song in LRC format. Results are cached at `./cache/lyrics/<so
 **Example**
 
 ```bash
-curl "http://localhost:8080/lyrics/1480785411"
+curl -H "Authorization: Bearer <api-token>" "http://localhost:8080/lyrics/1480785411"
 ```
 
 ```json

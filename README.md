@@ -36,7 +36,7 @@ The daemon binary is `target/release/main`.
 Run the daemon directly:
 
 ```bash
-./target/release/main --daemon-port 8080
+./target/release/main --daemon-port 8080 --api-token local-dev-token
 ```
 
 By default it binds to `127.0.0.1:8080`.
@@ -44,8 +44,10 @@ By default it binds to `127.0.0.1:8080`.
 Quick health check:
 
 ```bash
-curl http://127.0.0.1:8080/health
+curl -H "Authorization: Bearer local-dev-token" http://127.0.0.1:8080/health
 ```
+
+All daemon endpoints require `Authorization: Bearer <api-token>`.
 
 The daemon expects `ffmpeg`, `ffprobe`, and `MP4Box` at `/usr/local/bin`.
 Playback assembly uses `ffmpeg` for audio remux and `MP4Box` for the final `-itags` metadata pass.
@@ -101,6 +103,7 @@ Full request/response examples are documented in [API.md](API.md).
 
 ```bash
 curl -X POST http://127.0.0.1:8080/login \
+	-H 'Authorization: Bearer local-dev-token' \
 	-H 'content-type: application/json' \
 	-d '{"username":"apple@example.com","password":"secret"}'
 ```
@@ -115,6 +118,7 @@ Possible result:
 
 ```bash
 curl -X POST http://127.0.0.1:8080/login/2fa \
+	-H 'Authorization: Bearer local-dev-token' \
 	-H 'content-type: application/json' \
 	-d '{"code":"123456"}'
 ```
@@ -128,13 +132,14 @@ Success result:
 ### 3) Check status
 
 ```bash
-curl http://127.0.0.1:8080/status
+curl -H "Authorization: Bearer local-dev-token" http://127.0.0.1:8080/status
 ```
 
 ### 4) Logout
 
 ```bash
-curl -X POST http://127.0.0.1:8080/logout
+curl -X POST http://127.0.0.1:8080/logout \
+	-H 'Authorization: Bearer local-dev-token'
 ```
 
 ## Cache Layout
