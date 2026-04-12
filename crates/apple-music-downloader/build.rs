@@ -2,7 +2,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const BUILD_COMMIT_ENV: &str = "WRAPPER_GIT_COMMIT";
+const BUILD_COMMIT_ENV: &str = "GIT_COMMIT";
 const FALLBACK_BUILD_VERSION: &str = "00000000";
 
 fn main() {
@@ -19,7 +19,7 @@ fn main() {
         try_git_commit_prefix()
             .unwrap_or_else(|error| fallback_build_version(format!("git metadata: {error}")))
     };
-    println!("cargo:rustc-env=WRAPPER_BUILD_VERSION={version}");
+    println!("cargo:rustc-env=BUILD_VERSION={version}");
 }
 
 fn try_git_commit_prefix() -> Result<String, String> {

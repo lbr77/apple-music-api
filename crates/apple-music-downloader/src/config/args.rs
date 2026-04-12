@@ -12,9 +12,9 @@ const DEFAULT_DEVICE_INFO: &str =
 const DEFAULT_BASE_DIR: &str = "/data/data/com.apple.android.music/files";
 const DEFAULT_SUBSONIC_USERNAME: &str = "admin";
 const DEFAULT_SUBSONIC_PASSWORD: &str = "admin123";
-const MEDIA_USER_TOKEN_ENV: &str = "WRAPPER_MEDIA_USER_TOKEN";
-const SUBSONIC_USERNAME_ENV: &str = "WRAPPER_SUBSONIC_USERNAME";
-const SUBSONIC_PASSWORD_ENV: &str = "WRAPPER_SUBSONIC_PASSWORD";
+const MEDIA_USER_TOKEN_ENV: &str = "MEDIA_USER_TOKEN";
+const SUBSONIC_USERNAME_ENV: &str = "SUBSONIC_USERNAME";
+const SUBSONIC_PASSWORD_ENV: &str = "SUBSONIC_PASSWORD";
 
 #[derive(Clone, Debug)]
 pub struct AppConfig {

@@ -13,7 +13,7 @@ use error::AppResult;
 use runtime::AppState;
 
 /// Build-time git commit prefix for externally visible version reporting.
-pub const BUILD_VERSION: &str = env!("WRAPPER_BUILD_VERSION");
+pub const BUILD_VERSION: &str = env!("BUILD_VERSION");
 
 pub async fn run_server_process() -> AppResult<()> {
     install_android_log_shim();

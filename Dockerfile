@@ -15,7 +15,7 @@ RUN apt-get update \
 FROM rust:bookworm AS builder
 
 ARG ANDROID_NDK_URL="https://dl.google.com/android/repository/android-ndk-r25c-linux.zip"
-ARG WRAPPER_GIT_COMMIT
+ARG GIT_COMMIT
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl unzip \
@@ -28,7 +28,7 @@ RUN apt-get update \
     && rm -f /tmp/android-ndk.zip
 
 ENV ANDROID_NDK_HOME=/opt/android-ndk/current
-ENV WRAPPER_GIT_COMMIT=${WRAPPER_GIT_COMMIT}
+ENV GIT_COMMIT=${GIT_COMMIT}
 RUN cargo install --locked cargo-ndk
 RUN rustup target add x86_64-linux-android
 
