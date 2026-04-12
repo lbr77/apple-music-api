@@ -8,7 +8,7 @@ All endpoints require `Authorization: Bearer <api-token>`.
 
 ## GET /health
 
-Report daemon state and external media tool availability from the fixed `/usr/local/bin` runtime paths.
+Report daemon state, build version, and external media tool availability from the fixed `/usr/local/bin` runtime paths.
 
 `ffmpeg` and `ffprobe` are required for a healthy status. Playback uses `ffmpeg` for audio remux and writes final MP4 metadata directly in Rust.
 
@@ -22,6 +22,7 @@ curl -H "Authorization: Bearer <api-token>" "http://localhost:8080/health"
 {
   "status": "ok",
   "state": "logged_in",
+  "version": "1a2b3c4d",
   "ffmpeg": { "path": "/usr/local/bin/ffmpeg", "available": true, "version": "ffmpeg version 7.0.2-static" },
   "ffprobe": { "path": "/usr/local/bin/ffprobe", "available": true, "version": "ffprobe version 7.0.2-static" }
 }

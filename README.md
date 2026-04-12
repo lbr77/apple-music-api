@@ -47,6 +47,8 @@ Quick health check:
 curl -H "Authorization: Bearer local-dev-token" http://127.0.0.1:8080/health
 ```
 
+`/health` also returns a `version` field, which is the first 8 characters of the git commit hash captured at build time.
+
 All daemon endpoints require `Authorization: Bearer <api-token>`.
 
 The daemon expects `ffmpeg` and `ffprobe` at `/usr/local/bin`.

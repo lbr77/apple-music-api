@@ -5,9 +5,9 @@ use apple_music_api::{
     SongPlaybackMetadata,
 };
 use apple_music_decryptor::{
-    AppleMusicDecryptorError, ArtworkDescriptor, LoginAttempt, LoginWaitState, NativePlatform,
-    PlaybackOutput, PlaybackRequest, PlaybackTrackMetadata, SessionRuntime, download_playback,
-    tool_health_report,
+    AppleMusicDecryptorError, ArtworkDescriptor, BinaryHealth, LoginAttempt, LoginWaitState,
+    NativePlatform, PlaybackOutput, PlaybackRequest, PlaybackTrackMetadata, SessionRuntime,
+    ToolHealthReport, download_playback, tool_health_report,
 };
 use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
@@ -189,6 +189,15 @@ struct ErrorResponse {
     message: String,
 }
 
+#[derive(Debug, Serialize)]
+struct HealthResponse {
+    status: &'static str,
+    state: &'static str,
+    version: &'static str,
+    ffmpeg: BinaryHealth,
+    ffprobe: BinaryHealth,
+}
+
 fn default_search_limit() -> usize {
     10
 }
@@ -204,23 +213,8 @@ async fn status_handler(
 }
 
 async fn health_handler(State(context): State<Arc<DaemonContext>>) -> Response {
-    let report = tool_health_report();
-    let healthy = report.is_healthy();
-    let status = if healthy {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
-    };
-    (
-        status,
-        Json(json!({
-            "status": if healthy { "ok" } else { "degraded" },
-            "state": state_name(&context.state),
-            "ffmpeg": report.ffmpeg,
-            "ffprobe": report.ffprobe,
-        })),
-    )
-        .into_response()
+    let (status, body) = health_response(&context.state, tool_health_report());
+    (status, Json(body)).into_response()
 }
 
 async fn login_handler(
@@ -761,13 +755,36 @@ fn state_name(state: &AppState) -> &'static str {
     }
 }
 
+fn health_response(state: &AppState, report: ToolHealthReport) -> (StatusCode, HealthResponse) {
+    let healthy = report.is_healthy();
+    let status = if healthy {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        status,
+        HealthResponse {
+            status: if healthy { "ok" } else { "degraded" },
+            state: state_name(state),
+            version: crate::BUILD_VERSION,
+            ffmpeg: report.ffmpeg,
+            ffprobe: report.ffprobe,
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ApiError, ErrorResponse};
+    use super::{ApiError, ErrorResponse, health_response};
+    use std::process::Command;
+
+    use apple_music_decryptor::{BinaryHealth, ToolHealthReport};
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
     use crate::error::AppError;
+    use crate::runtime::AppState;
 
     #[test]
     fn conflict_errors_serialize_request_status_separately_from_session_state() {
@@ -819,5 +836,54 @@ mod tests {
                 .expect("www-authenticate header"),
             "Bearer"
         );
+    }
+
+    #[test]
+    fn health_response_includes_build_version() {
+        let (status, body) = health_response(
+            &AppState::default(),
+            ToolHealthReport {
+                ffmpeg: available_binary("/usr/local/bin/ffmpeg"),
+                ffprobe: available_binary("/usr/local/bin/ffprobe"),
+            },
+        );
+        assert_eq!(status, StatusCode::OK);
+
+        let json = serde_json::to_value(&body).expect("serialize health response");
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["state"], "logged_out");
+        assert_eq!(json["version"], crate::BUILD_VERSION);
+    }
+
+    #[test]
+    fn build_version_uses_short_lowercase_git_prefix() {
+        assert_eq!(crate::BUILD_VERSION.len(), 8);
+        assert!(
+            crate::BUILD_VERSION
+                .chars()
+                .all(|ch| matches!(ch, '0'..='9' | 'a'..='f'))
+        );
+    }
+
+    #[test]
+    fn build_version_matches_git_head_prefix() {
+        let output = Command::new("git")
+            .args(["rev-parse", "--verify", "HEAD"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("read git head");
+        assert!(output.status.success(), "git rev-parse HEAD failed");
+
+        let head = String::from_utf8(output.stdout).expect("git head is utf-8");
+        assert_eq!(crate::BUILD_VERSION, &head.trim()[..8]);
+    }
+
+    fn available_binary(path: &'static str) -> BinaryHealth {
+        BinaryHealth {
+            path,
+            available: true,
+            version: Some("test".into()),
+            error: None,
+        }
     }
 }
