@@ -36,6 +36,8 @@ The daemon binary is `target/release/main`.
 Run the daemon directly:
 
 ```bash
+WRAPPER_SUBSONIC_USERNAME=admin \
+WRAPPER_SUBSONIC_PASSWORD=admin123 \
 ./target/release/main --daemon-port 8080 --api-token local-dev-token
 ```
 
@@ -50,6 +52,11 @@ curl -H "Authorization: Bearer local-dev-token" http://127.0.0.1:8080/health
 `/health` also returns a `version` field, which is the first 8 characters of the git commit hash captured at build time.
 
 All daemon endpoints require `Authorization: Bearer <api-token>`.
+
+Subsonic-compatible `/rest/*.view` endpoints read credentials from environment variables instead of CLI flags:
+
+- `WRAPPER_SUBSONIC_USERNAME` defaults to `admin`
+- `WRAPPER_SUBSONIC_PASSWORD` defaults to `admin123`
 
 The daemon expects `ffmpeg` and `ffprobe` at `/usr/local/bin`.
 Playback assembly uses `ffmpeg` for audio remux and writes final MP4 metadata directly in Rust.
