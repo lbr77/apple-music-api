@@ -219,6 +219,37 @@ fn default_search_type() -> String {
     "song".into()
 }
 
+fn resolve_storefront(
+    requested: Option<&str>,
+    session: Option<&SessionRuntime>,
+    configured: &str,
+) -> String {
+    if let Some(storefront) = requested
+        .map(str::trim)
+        .filter(|value| value.len() == 2)
+        .map(|value| value.to_ascii_lowercase())
+    {
+        return storefront;
+    }
+
+    // Apple serves playback and lyrics against the account storefront even when search works in
+    // other catalogs. Using the session storefront keeps the whole download chain consistent.
+    if let Some(storefront) = session
+        .map(|session| {
+            session
+                .account_profile()
+                .storefront_id
+                .trim()
+                .to_ascii_lowercase()
+        })
+        .filter(|value| value.len() == 2)
+    {
+        return storefront;
+    }
+
+    configured.to_owned()
+}
+
 async fn status_handler(
     State(context): State<Arc<DaemonContext>>,
 ) -> Result<Json<AuthResponse>, ApiError> {
@@ -350,14 +381,15 @@ async fn search_handler(
         )));
     }
 
-    let storefront = params
-        .storefront
-        .as_deref()
-        .unwrap_or(context.default_storefront());
+    let storefront = resolve_storefront(
+        params.storefront.as_deref(),
+        context.state.session().as_deref(),
+        context.default_storefront(),
+    );
     let response = context
         .api
         .search(SearchRequest {
-            storefront,
+            storefront: &storefront,
             language: context.default_language(),
             query: &params.query,
             search_type: &params.search_type,
@@ -375,14 +407,15 @@ async fn album_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let session = context.session()?;
     let profile = session.account_profile();
-    let storefront = params
-        .storefront
-        .as_deref()
-        .unwrap_or(context.default_storefront());
+    let storefront = resolve_storefront(
+        params.storefront.as_deref(),
+        Some(session.as_ref()),
+        context.default_storefront(),
+    );
     let response = context
         .api
         .album(
-            storefront,
+            &storefront,
             context.default_language(),
             &profile.dev_token,
             &album_id,
@@ -398,14 +431,15 @@ async fn song_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let session = context.session()?;
     let profile = session.account_profile();
-    let storefront = params
-        .storefront
-        .as_deref()
-        .unwrap_or(context.default_storefront());
+    let storefront = resolve_storefront(
+        params.storefront.as_deref(),
+        Some(session.as_ref()),
+        context.default_storefront(),
+    );
     let response = context
         .api
         .song(
-            storefront,
+            &storefront,
             context.default_language(),
             &profile.dev_token,
             &song_id,
@@ -421,14 +455,15 @@ async fn artist_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let session = context.session()?;
     let profile = session.account_profile();
-    let storefront = params
-        .storefront
-        .as_deref()
-        .unwrap_or(context.default_storefront());
+    let storefront = resolve_storefront(
+        params.storefront.as_deref(),
+        Some(session.as_ref()),
+        context.default_storefront(),
+    );
     let response = context
         .api
         .artist(
-            storefront,
+            &storefront,
             context.default_language(),
             &profile.dev_token,
             &artist_id,
@@ -446,14 +481,15 @@ async fn artist_view_handler(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let session = context.session()?;
     let profile = session.account_profile();
-    let storefront = params
-        .storefront
-        .as_deref()
-        .unwrap_or(context.default_storefront());
+    let storefront = resolve_storefront(
+        params.storefront.as_deref(),
+        Some(session.as_ref()),
+        context.default_storefront(),
+    );
     let response = context
         .api
         .artist_view(ArtistViewRequest {
-            storefront,
+            storefront: &storefront,
             language: context.default_language(),
             dev_token: &profile.dev_token,
             artist_id: &artist_id,
@@ -487,14 +523,15 @@ async fn lyrics_handler(
         .media_user_token
         .as_deref()
         .unwrap_or(&profile.music_token);
-    let storefront = params
-        .storefront
-        .as_deref()
-        .unwrap_or(context.default_storefront());
+    let storefront = resolve_storefront(
+        params.storefront.as_deref(),
+        Some(session.as_ref()),
+        context.default_storefront(),
+    );
     let lyrics = context
         .api
         .lyrics(
-            storefront,
+            &storefront,
             context.default_language(),
             lyrics_music_token,
             &song_id,
@@ -517,10 +554,11 @@ async fn playback_handler(
         .media_user_token
         .as_deref()
         .unwrap_or(&profile.music_token);
-    let storefront = params
-        .storefront
-        .clone()
-        .unwrap_or_else(|| context.default_storefront().to_owned());
+    let storefront = resolve_storefront(
+        params.storefront.as_deref(),
+        Some(session.as_ref()),
+        context.default_storefront(),
+    );
     let metadata = context
         .api
         .song_playback_metadata(

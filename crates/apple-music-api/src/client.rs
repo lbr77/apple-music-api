@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use regex::Regex;
 use reqwest::header::{AUTHORIZATION, COOKIE, ORIGIN, REFERER};
-use reqwest::{Client, Proxy};
+use reqwest::{Client, Proxy, RequestBuilder};
 use roxmltree::Document;
 use serde::Deserialize;
 use serde_json::Value;
@@ -439,15 +439,9 @@ impl AppleApiClient {
     ) -> ApiResult<Value> {
         let web_token = self.web_token(false).await?;
         let path = format!("/v1/catalog/{storefront}/songs/{song_id}/{endpoint}");
-        let params = [("extend", "ttmlLocalizations".into())];
+        let url = lyrics_request_url(&path, language);
         let result = self
-            .catalog_json(
-                path.clone(),
-                language,
-                &web_token,
-                Some(music_token),
-                &params,
-            )
+            .lyrics_catalog_json(url.as_str(), &web_token, music_token)
             .await;
         if let Err(AppleMusicApiError::UpstreamHttp { status, .. }) = &result
             && matches!(
@@ -457,13 +451,7 @@ impl AppleApiClient {
         {
             let refreshed_web_token = self.web_token(true).await?;
             return self
-                .catalog_json(
-                    path,
-                    language,
-                    &refreshed_web_token,
-                    Some(music_token),
-                    &params,
-                )
+                .lyrics_catalog_json(url.as_str(), &refreshed_web_token, music_token)
                 .await;
         }
         result
@@ -499,6 +487,42 @@ impl AppleApiClient {
             request = request.query(params);
         }
 
+        self.send_json(request).await
+    }
+
+    async fn catalog_json(
+        &self,
+        path: String,
+        language: Option<&str>,
+        dev_token: &str,
+        music_token: Option<&str>,
+        params: &[(&str, String)],
+    ) -> ApiResult<Value> {
+        self.catalog(path, language, dev_token, music_token, params)
+            .await
+    }
+
+    async fn lyrics_catalog_json(
+        &self,
+        url: &str,
+        dev_token: &str,
+        music_token: &str,
+    ) -> ApiResult<Value> {
+        let request = self
+            .client
+            .get(url)
+            .header(AUTHORIZATION, format!("Bearer {dev_token}"))
+            .header(ORIGIN, MUSIC_ORIGIN)
+            .header(REFERER, format!("{MUSIC_ORIGIN}/"))
+            .header("media-user-token", music_token)
+            .header(COOKIE, format!("media-user-token={music_token}"));
+        self.send_json(request).await
+    }
+
+    async fn send_json<T: serde::de::DeserializeOwned>(
+        &self,
+        request: RequestBuilder,
+    ) -> ApiResult<T> {
         let response = request.send().await?;
         let status = response.status();
         if !status.is_success() {
@@ -514,18 +538,6 @@ impl AppleApiClient {
             });
         }
         Ok(response.json().await?)
-    }
-
-    async fn catalog_json(
-        &self,
-        path: String,
-        language: Option<&str>,
-        dev_token: &str,
-        music_token: Option<&str>,
-        params: &[(&str, String)],
-    ) -> ApiResult<Value> {
-        self.catalog(path, language, dev_token, music_token, params)
-            .await
     }
 
     async fn search_apple_catalog(&self, request: &SearchRequest<'_>) -> ApiResult<Value> {
@@ -672,6 +684,23 @@ fn retry_after_ttl(retry_after: Option<&str>) -> Duration {
         .map(Duration::from_secs)
         .filter(|value| !value.is_zero())
         .unwrap_or(SEARCH_RATE_LIMIT_TTL)
+}
+
+fn lyrics_request_url(path: &str, language: Option<&str>) -> String {
+    let mut params = Vec::new();
+    if let Some(language) = language.map(str::trim).filter(|value| !value.is_empty()) {
+        let language = language.trim_start_matches('?');
+        if language.contains('=') || language.contains('&') {
+            params.push(language.to_owned());
+        } else {
+            params.push(format!("l={language}"));
+        }
+    }
+    if !params.iter().any(|value| value.contains("extend=")) {
+        params.push("extend=ttmlLocalizations".into());
+    }
+
+    format!("https://amp-api.music.apple.com{path}?{}", params.join("&"))
 }
 
 fn lyrics_ttml(response: &Value) -> Option<&str> {
