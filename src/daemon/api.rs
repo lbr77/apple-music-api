@@ -1,17 +1,104 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use reqwest::header::{AUTHORIZATION, COOKIE, ORIGIN, REFERER};
 use reqwest::{Client, Proxy};
 use roxmltree::Document;
 use serde_json::Value;
+use tokio::sync::{Mutex, Notify, Semaphore};
 
 use crate::config::AppConfig;
 use crate::error::{AppError, AppResult};
 
 const MUSIC_ORIGIN: &str = "https://music.apple.com";
 const DESKTOP_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
+const SEARCH_CACHE_TTL: Duration = Duration::from_secs(15);
+const SEARCH_THROTTLE_WINDOW: Duration = Duration::from_millis(400);
+const SEARCH_RATE_LIMIT_TTL: Duration = Duration::from_secs(2);
+const SEARCH_MAX_CONCURRENCY: usize = 1;
+
+pub(crate) struct SearchRequest<'a> {
+    pub storefront: &'a str,
+    pub language: Option<&'a str>,
+    pub dev_token: &'a str,
+    pub query: &'a str,
+    pub search_type: &'a str,
+    pub limit: usize,
+    pub offset: usize,
+}
+
+impl SearchRequest<'_> {
+    fn cache_key(&self) -> SearchCacheKey {
+        SearchCacheKey {
+            storefront: self.storefront.to_owned(),
+            language: self
+                .language
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
+            query: self.query.trim().to_owned(),
+            search_type: self.search_type.to_owned(),
+            limit: self.limit,
+            offset: self.offset,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct SearchCacheKey {
+    storefront: String,
+    language: Option<String>,
+    query: String,
+    search_type: String,
+    limit: usize,
+    offset: usize,
+}
+
+#[derive(Clone)]
+struct SearchCacheEntry {
+    expires_at: Instant,
+    payload: CachedSearchPayload,
+}
+
+#[derive(Clone)]
+enum CachedSearchPayload {
+    Response(Value),
+    Error(CachedUpstreamError),
+}
+
+impl CachedSearchPayload {
+    fn into_result(self) -> AppResult<Value> {
+        match self {
+            Self::Response(value) => Ok(value),
+            Self::Error(error) => Err(error.into_app_error()),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct CachedUpstreamError {
+    status: reqwest::StatusCode,
+    message: String,
+    retry_after: Option<String>,
+}
+
+impl CachedUpstreamError {
+    fn into_app_error(self) -> AppError {
+        AppError::UpstreamHttp {
+            status: self.status,
+            message: self.message,
+            retry_after: self.retry_after,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AppleApiClient {
     client: Client,
+    search_cache: Arc<Mutex<HashMap<SearchCacheKey, SearchCacheEntry>>>,
+    search_inflight: Arc<Mutex<HashMap<SearchCacheKey, Arc<Notify>>>>,
+    search_gate: Arc<Semaphore>,
+    search_next_allowed_at: Arc<Mutex<Instant>>,
 }
 
 impl AppleApiClient {
@@ -22,32 +109,70 @@ impl AppleApiClient {
         }
         Ok(Self {
             client: builder.build()?,
+            search_cache: Arc::new(Mutex::new(HashMap::new())),
+            search_inflight: Arc::new(Mutex::new(HashMap::new())),
+            search_gate: Arc::new(Semaphore::new(SEARCH_MAX_CONCURRENCY)),
+            search_next_allowed_at: Arc::new(Mutex::new(Instant::now())),
         })
     }
 
-    pub async fn search(
-        &self,
-        storefront: &str,
-        language: Option<&str>,
-        dev_token: &str,
-        query: &str,
-        search_type: &str,
-        limit: usize,
-        offset: usize,
-    ) -> AppResult<Value> {
-        self.catalog_json(
-            format!("/v1/catalog/{storefront}/search"),
-            language,
-            dev_token,
-            None,
-            &[
-                ("term", query.to_owned()),
-                ("types", format!("{search_type}s")),
-                ("limit", limit.to_string()),
-                ("offset", offset.to_string()),
-            ],
-        )
-        .await
+    pub async fn search(&self, request: SearchRequest<'_>) -> AppResult<Value> {
+        let key = request.cache_key();
+
+        loop {
+            if let Some(cached) = self.cached_search_payload(&key).await {
+                return cached.into_result();
+            }
+
+            let inflight = {
+                let mut search_inflight = self.search_inflight.lock().await;
+                if let Some(notify) = search_inflight.get(&key) {
+                    Some(Arc::clone(notify))
+                } else {
+                    let notify = Arc::new(Notify::new());
+                    search_inflight.insert(key.clone(), Arc::clone(&notify));
+                    None
+                }
+            };
+
+            if let Some(notify) = inflight {
+                notify.notified().await;
+                continue;
+            }
+
+            let result = self.search_apple_catalog(&request).await;
+
+            match &result {
+                Ok(value) => {
+                    self.insert_search_cache(
+                        key.clone(),
+                        CachedSearchPayload::Response(value.clone()),
+                        SEARCH_CACHE_TTL,
+                    )
+                    .await;
+                }
+                Err(AppError::UpstreamHttp {
+                    status,
+                    message,
+                    retry_after,
+                }) if *status == reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                    self.insert_search_cache(
+                        key.clone(),
+                        CachedSearchPayload::Error(CachedUpstreamError {
+                            status: *status,
+                            message: message.clone(),
+                            retry_after: retry_after.clone(),
+                        }),
+                        retry_after_ttl(retry_after.as_deref()),
+                    )
+                    .await;
+                }
+                Err(_) => {}
+            }
+
+            self.finish_search_flight(&key).await;
+            return result;
+        }
     }
 
     pub async fn album(
@@ -72,15 +197,11 @@ impl AppleApiClient {
             )
             .await?;
 
-        loop {
-            let Some(next_path) = album
-                .pointer("/data/0/relationships/tracks/next")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-            else {
-                break;
-            };
-
+        while let Some(next_path) = album
+            .pointer("/data/0/relationships/tracks/next")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        {
             let next_page = self
                 .catalog_json(
                     next_path,
@@ -184,12 +305,93 @@ impl AppleApiClient {
         let response = request.send().await?;
         let status = response.status();
         if !status.is_success() {
-            return Err(AppError::Message(format!(
-                "apple api request failed: {status}"
-            )));
+            let retry_after = response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            return Err(AppError::UpstreamHttp {
+                status,
+                message: format!("apple api request failed: {status}"),
+                retry_after,
+            });
         }
         Ok(response.json().await?)
     }
+
+    async fn search_apple_catalog(&self, request: &SearchRequest<'_>) -> AppResult<Value> {
+        let _permit = self
+            .search_gate
+            .acquire()
+            .await
+            .expect("search semaphore should stay open");
+        self.throttle_search().await;
+        self.catalog_json(
+            format!("/v1/catalog/{}/search", request.storefront),
+            request.language,
+            request.dev_token,
+            None,
+            &[
+                ("term", request.query.trim().to_owned()),
+                ("types", format!("{}s", request.search_type)),
+                ("limit", request.limit.to_string()),
+                ("offset", request.offset.to_string()),
+            ],
+        )
+        .await
+    }
+
+    async fn throttle_search(&self) {
+        let mut next_allowed_at = self.search_next_allowed_at.lock().await;
+        let now = Instant::now();
+        if *next_allowed_at > now {
+            tokio::time::sleep(*next_allowed_at - now).await;
+        }
+        *next_allowed_at = Instant::now() + SEARCH_THROTTLE_WINDOW;
+    }
+
+    async fn cached_search_payload(&self, key: &SearchCacheKey) -> Option<CachedSearchPayload> {
+        let now = Instant::now();
+        let mut search_cache = self.search_cache.lock().await;
+        match search_cache.get(key) {
+            Some(entry) if entry.expires_at > now => Some(entry.payload.clone()),
+            Some(_) => {
+                search_cache.remove(key);
+                None
+            }
+            None => None,
+        }
+    }
+
+    async fn insert_search_cache(
+        &self,
+        key: SearchCacheKey,
+        payload: CachedSearchPayload,
+        ttl: Duration,
+    ) {
+        self.search_cache.lock().await.insert(
+            key,
+            SearchCacheEntry {
+                expires_at: Instant::now() + ttl,
+                payload,
+            },
+        );
+    }
+
+    async fn finish_search_flight(&self, key: &SearchCacheKey) {
+        let notify = self.search_inflight.lock().await.remove(key);
+        if let Some(notify) = notify {
+            notify.notify_waiters();
+        }
+    }
+}
+
+fn retry_after_ttl(retry_after: Option<&str>) -> Duration {
+    retry_after
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .filter(|value| !value.is_zero())
+        .unwrap_or(SEARCH_RATE_LIMIT_TTL)
 }
 
 fn append_album_tracks(album: &mut Value, mut next_page: Value) -> AppResult<()> {
@@ -305,4 +507,25 @@ fn parse_ttml_timestamp(value: &str) -> AppResult<(u32, u32, u32)> {
     let rounded = total_centiseconds.round() as u32;
     let total_seconds = rounded / 100;
     Ok((total_seconds / 60, total_seconds % 60, rounded % 100))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::retry_after_ttl;
+
+    #[test]
+    fn retry_after_ttl_uses_numeric_header_value() {
+        assert_eq!(retry_after_ttl(Some("7")), Duration::from_secs(7));
+    }
+
+    #[test]
+    fn retry_after_ttl_falls_back_for_invalid_value() {
+        assert_eq!(
+            retry_after_ttl(Some("Wed, 21 Oct 2015 07:28:00 GMT")),
+            Duration::from_secs(2)
+        );
+        assert_eq!(retry_after_ttl(None), Duration::from_secs(2));
+    }
 }

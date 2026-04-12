@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::http::header::{HeaderValue, RETRY_AFTER};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -18,7 +19,7 @@ use crate::error::{AppError, AppResult};
 use crate::ffi::{LoginAttempt, LoginWaitState, NativePlatform};
 use crate::runtime::{AppState, SessionRuntime};
 
-use self::api::AppleApiClient;
+use self::api::{AppleApiClient, SearchRequest};
 use self::download::{PlaybackOutput, tool_health_report};
 
 #[derive(Clone)]
@@ -234,7 +235,7 @@ async fn login_handler(
                 "verification code required",
             )))
         }
-        LoginWaitState::Completed(result) => match result {
+        LoginWaitState::Completed(result) => match *result {
             Ok(session) => {
                 let session = SessionRuntime::new(session)?;
                 context.state.replace_session(Arc::new(session));
@@ -325,15 +326,15 @@ async fn search_handler(
         .unwrap_or(context.default_storefront());
     let response = context
         .api
-        .search(
+        .search(SearchRequest {
             storefront,
-            context.default_language(),
-            &profile.dev_token,
-            &params.query,
-            &params.search_type,
-            params.limit,
-            params.offset,
-        )
+            language: context.default_language(),
+            dev_token: &profile.dev_token,
+            query: &params.query,
+            search_type: &params.search_type,
+            limit: params.limit,
+            offset: params.offset,
+        })
         .await?;
     Ok(Json(response))
 }
@@ -464,6 +465,7 @@ struct ApiError {
     status: StatusCode,
     state: Option<&'static str>,
     message: String,
+    retry_after: Option<String>,
 }
 
 impl ApiError {
@@ -472,6 +474,7 @@ impl ApiError {
             status: StatusCode::BAD_REQUEST,
             state: None,
             message: message.into(),
+            retry_after: None,
         }
     }
 
@@ -480,6 +483,7 @@ impl ApiError {
             status: StatusCode::CONFLICT,
             state: Some(state),
             message: message.into(),
+            retry_after: None,
         }
     }
 
@@ -488,6 +492,7 @@ impl ApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             state: None,
             message: message.into(),
+            retry_after: None,
         }
     }
 }
@@ -499,6 +504,7 @@ impl From<AppError> for ApiError {
                 status: StatusCode::CONFLICT,
                 state: Some("logged_out"),
                 message: "no active session".into(),
+                retry_after: None,
             },
             AppError::Protocol(message)
             | AppError::InvalidDeviceInfo(message)
@@ -507,6 +513,17 @@ impl From<AppError> for ApiError {
                 status: StatusCode::BAD_REQUEST,
                 state: None,
                 message,
+                retry_after: None,
+            },
+            AppError::UpstreamHttp {
+                status,
+                message,
+                retry_after,
+            } => Self {
+                status: StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+                state: None,
+                message,
+                retry_after,
             },
             AppError::Command(message) => Self::internal(message),
             other => Self::internal(other.to_string()),
@@ -522,7 +539,7 @@ impl From<std::io::Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (
+        let mut response = (
             self.status,
             Json(ErrorResponse {
                 status: "error",
@@ -530,7 +547,13 @@ impl IntoResponse for ApiError {
                 message: self.message,
             }),
         )
-            .into_response()
+            .into_response();
+        if let Some(retry_after) = self.retry_after.as_deref()
+            && let Ok(value) = HeaderValue::from_str(retry_after)
+        {
+            response.headers_mut().insert(RETRY_AFTER, value);
+        }
+        response
     }
 }
 
@@ -548,6 +571,9 @@ fn state_name(state: &AppState) -> &'static str {
 mod tests {
     use super::{ApiError, ErrorResponse};
     use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    use crate::error::AppError;
 
     #[test]
     fn conflict_errors_serialize_request_status_separately_from_session_state() {
@@ -568,5 +594,23 @@ mod tests {
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert_eq!(error.state, None);
         assert_eq!(error.message, "query parameter is required");
+    }
+
+    #[test]
+    fn upstream_429_preserves_status_and_retry_after_header() {
+        let response = ApiError::from(AppError::UpstreamHttp {
+            status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+            message: "apple api request failed: 429 Too Many Requests".into(),
+            retry_after: Some("3".into()),
+        })
+        .into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .expect("retry-after header"),
+            "3"
+        );
     }
 }

@@ -107,7 +107,7 @@ fn handle_control_connection(
                         &ControlResponse::need_2fa("verification code required"),
                     )?;
                 }
-                LoginWaitState::Completed(result) => match result {
+                LoginWaitState::Completed(result) => match *result {
                     Ok(session) => {
                         crate::app_info!("server::control", "login from {peer} completed");
                         let session = SessionRuntime::new(session)?;

@@ -7,9 +7,9 @@ use std::process::{Command, Output};
 use std::sync::LazyLock;
 
 use regex::Regex;
+use reqwest::Proxy;
 use reqwest::blocking::{Client, ClientBuilder};
 use reqwest::header::{AUTHORIZATION, ORIGIN, RANGE, REFERER};
-use reqwest::Proxy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

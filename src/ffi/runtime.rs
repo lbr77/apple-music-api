@@ -42,7 +42,7 @@ pub struct AccountProfile {
 
 pub enum LoginWaitState {
     NeedTwoFactor,
-    Completed(AppResult<NativeSession>),
+    Completed(Box<AppResult<NativeSession>>),
 }
 
 struct LoginInner {
@@ -208,11 +208,11 @@ impl LoginAttempt {
                     "ffi::login",
                     "initial login state resolved: forced failure: {message}"
                 );
-                return LoginWaitState::Completed(Err(AppError::Native(message)));
+                return LoginWaitState::Completed(Box::new(Err(AppError::Native(message))));
             }
             if let Some(result) = inner.completed.take() {
                 crate::app_info!("ffi::login", "initial login state resolved: completed");
-                return LoginWaitState::Completed(result);
+                return LoginWaitState::Completed(Box::new(result));
             }
             if inner.need_two_factor {
                 crate::app_warn!("ffi::login", "initial login state resolved: need_2fa");
@@ -819,10 +819,7 @@ impl NativeSession {
 
     #[allow(dead_code)]
     pub fn refresh_lease(&self) -> AppResult<()> {
-        crate::app_info!(
-            "ffi::session",
-            "refreshing playback lease"
-        );
+        crate::app_info!("ffi::session", "refreshing playback lease");
         let _guard = self.session_lock.lock().expect("session lock poisoned");
         let automatic = 1_u8;
         unsafe {
@@ -1631,9 +1628,12 @@ mod tests {
         attempt.fail_initial_login("invalid credentials");
 
         match attempt.wait_for_initial_state() {
-            LoginWaitState::Completed(Err(error)) => {
-                assert_eq!(error.to_string(), "native error: invalid credentials");
-            }
+            LoginWaitState::Completed(result) => match *result {
+                Err(error) => {
+                    assert_eq!(error.to_string(), "native error: invalid credentials");
+                }
+                Ok(_) => panic!("unexpected successful login state"),
+            },
             _ => panic!("unexpected login state"),
         }
     }

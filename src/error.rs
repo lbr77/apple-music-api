@@ -31,6 +31,12 @@ pub enum AppError {
     Protocol(String),
     #[error("native error: {0}")]
     Native(String),
+    #[error("{message}")]
+    UpstreamHttp {
+        status: reqwest::StatusCode,
+        message: String,
+        retry_after: Option<String>,
+    },
     #[error("no active session")]
     NoActiveSession,
     #[error("2FA was not requested for the current login flow")]
