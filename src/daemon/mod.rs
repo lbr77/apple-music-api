@@ -79,6 +79,8 @@ pub async fn run_daemon_server(
         .route("/login/reset", post(reset_login_handler))
         .route("/logout", post(logout_handler))
         .route("/search", get(search_handler))
+        .route("/artist/{id}", get(artist_handler))
+        .route("/artist/{id}/view/{name}", get(artist_view_handler))
         .route("/album/{id}", get(album_handler))
         .route("/song/{id}", get(song_handler))
         .route("/lyrics/{id}", get(lyrics_handler))
@@ -128,6 +130,20 @@ struct SearchParams {
 #[derive(Debug, Deserialize)]
 struct StorefrontParams {
     storefront: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArtistParams {
+    storefront: Option<String>,
+    views: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ArtistViewParams {
+    storefront: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -389,6 +405,57 @@ async fn song_handler(
             context.default_language(),
             &profile.dev_token,
             &song_id,
+        )
+        .await?;
+    Ok(Json(response))
+}
+
+async fn artist_handler(
+    State(context): State<Arc<DaemonContext>>,
+    Path(artist_id): Path<String>,
+    Query(params): Query<ArtistParams>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let session = context.session()?;
+    let profile = session.account_profile();
+    let storefront = params
+        .storefront
+        .as_deref()
+        .unwrap_or(context.default_storefront());
+    let response = context
+        .api
+        .artist(
+            storefront,
+            context.default_language(),
+            &profile.dev_token,
+            &artist_id,
+            params.views.as_deref(),
+            params.limit,
+        )
+        .await?;
+    Ok(Json(response))
+}
+
+async fn artist_view_handler(
+    State(context): State<Arc<DaemonContext>>,
+    Path((artist_id, view_name)): Path<(String, String)>,
+    Query(params): Query<ArtistViewParams>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let session = context.session()?;
+    let profile = session.account_profile();
+    let storefront = params
+        .storefront
+        .as_deref()
+        .unwrap_or(context.default_storefront());
+    let response = context
+        .api
+        .artist_view(
+            storefront,
+            context.default_language(),
+            &profile.dev_token,
+            &artist_id,
+            &view_name,
+            params.limit,
+            params.offset,
         )
         .await?;
     Ok(Json(response))

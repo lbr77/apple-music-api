@@ -76,6 +76,110 @@ curl -H "Authorization: Bearer <api-token>" "http://localhost:8080/search?query=
 
 ---
 
+## GET /artist/:id
+
+Fetch artist metadata plus the default Apple Music artist-page views.
+
+By default this endpoint asks Apple Music for:
+`top-songs`, `latest-release`, `full-albums`, `singles`,
+`featured-playlists`, `playlists`, `similar-artists`, and
+`top-music-videos`.
+
+**Path Parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `id`      | Apple Music artist ID |
+
+**Query Parameters**
+
+| Parameter    | Default        | Description |
+|--------------|----------------|-------------|
+| `storefront` | Config default | Storefront region |
+| `views`      | Built-in list  | Comma-separated artist views to request from Apple Music |
+| `limit`      | Apple default  | Per-view item limit applied by Apple Music |
+
+**Example**
+
+```bash
+curl -H "Authorization: Bearer <api-token>" "http://localhost:8080/artist/287018328"
+```
+
+```json
+{
+  "data": [
+    {
+      "id": "287018328",
+      "type": "artists",
+      "attributes": {
+        "name": "IOSYS",
+        "url": "https://music.apple.com/jp/artist/iosys/287018328"
+      },
+      "relationships": {
+        "genres": { "data": [{ "id": "34", "type": "genres", "attributes": { "name": "J-Pop" } }] },
+        "station": { "data": [{ "id": "ra.123", "type": "stations" }] }
+      },
+      "views": {
+        "top-songs": { "data": [{ "id": "1480785395", "type": "songs" }] },
+        "latest-release": { "data": [{ "id": "1480785394", "type": "albums" }] },
+        "full-albums": { "data": [{ "id": "1480785394", "type": "albums" }] },
+        "similar-artists": { "data": [{ "id": "123456789", "type": "artists" }] }
+      }
+    }
+  ]
+}
+```
+
+---
+
+## GET /artist/:id/view/:name
+
+Fetch a single artist view directly, which is useful for independent section pagination on an artist page.
+
+Examples of `name` include `top-songs`, `full-albums`, `singles`,
+`featured-playlists`, `playlists`, `similar-artists`, and
+`top-music-videos`.
+
+**Path Parameters**
+
+| Parameter | Description |
+|-----------|-------------|
+| `id`      | Apple Music artist ID |
+| `name`    | Apple Music artist view name |
+
+**Query Parameters**
+
+| Parameter    | Default        | Description |
+|--------------|----------------|-------------|
+| `storefront` | Config default | Storefront region |
+| `limit`      | Apple default  | Number of items |
+| `offset`     | `0`            | Pagination offset |
+
+**Example**
+
+```bash
+curl -H "Authorization: Bearer <api-token>" "http://localhost:8080/artist/287018328/view/full-albums?limit=25&offset=0"
+```
+
+```json
+{
+  "href": "/v1/catalog/jp/artists/287018328/view/full-albums?limit=25&offset=0&l=ja",
+  "next": "/v1/catalog/jp/artists/287018328/view/full-albums?limit=25&offset=25&l=ja",
+  "data": [
+    {
+      "id": "1480785394",
+      "type": "albums",
+      "attributes": {
+        "artistName": "IOSYS",
+        "name": "miko BEST Toho of IOSYS"
+      }
+    }
+  ]
+}
+```
+
+---
+
 ## GET /album/:id
 
 Fetch album metadata and full track list.

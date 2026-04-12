@@ -17,6 +17,8 @@ const SEARCH_CACHE_TTL: Duration = Duration::from_secs(15);
 const SEARCH_THROTTLE_WINDOW: Duration = Duration::from_millis(400);
 const SEARCH_RATE_LIMIT_TTL: Duration = Duration::from_secs(2);
 const SEARCH_MAX_CONCURRENCY: usize = 1;
+const DEFAULT_ARTIST_INCLUDE: &str = "genres,station";
+const DEFAULT_ARTIST_VIEWS: &str = "top-songs,latest-release,full-albums,singles,featured-playlists,playlists,similar-artists,top-music-videos";
 
 pub(crate) struct SearchRequest<'a> {
     pub storefront: &'a str,
@@ -237,6 +239,66 @@ impl AppleApiClient {
                 ("include", "albums,artists".into()),
                 ("extend", "extendedAssetUrls".into()),
             ],
+        )
+        .await
+    }
+
+    pub async fn artist(
+        &self,
+        storefront: &str,
+        language: Option<&str>,
+        dev_token: &str,
+        artist_id: &str,
+        views: Option<&str>,
+        limit: Option<usize>,
+    ) -> AppResult<Value> {
+        let mut params = vec![("include", DEFAULT_ARTIST_INCLUDE.to_owned())];
+        params.push((
+            "views",
+            views
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(DEFAULT_ARTIST_VIEWS)
+                .to_owned(),
+        ));
+        if let Some(limit) = limit {
+            params.push(("limit", limit.to_string()));
+        }
+
+        self.catalog_json(
+            format!("/v1/catalog/{storefront}/artists/{artist_id}"),
+            language,
+            dev_token,
+            None,
+            &params,
+        )
+        .await
+    }
+
+    pub async fn artist_view(
+        &self,
+        storefront: &str,
+        language: Option<&str>,
+        dev_token: &str,
+        artist_id: &str,
+        view_name: &str,
+        limit: Option<usize>,
+        offset: Option<usize>,
+    ) -> AppResult<Value> {
+        let mut params = Vec::new();
+        if let Some(limit) = limit {
+            params.push(("limit", limit.to_string()));
+        }
+        if let Some(offset) = offset {
+            params.push(("offset", offset.to_string()));
+        }
+
+        self.catalog_json(
+            format!("/v1/catalog/{storefront}/artists/{artist_id}/view/{view_name}"),
+            language,
+            dev_token,
+            None,
+            &params,
         )
         .await
     }
