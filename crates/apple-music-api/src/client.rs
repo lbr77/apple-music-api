@@ -403,45 +403,70 @@ impl AppleApiClient {
         music_token: &str,
         song_id: &str,
     ) -> ApiResult<String> {
+        let mut last_error = None;
+        for endpoint in ["lyrics", "syllable-lyrics"] {
+            match self
+                .lyrics_response(storefront, language, music_token, song_id, endpoint)
+                .await
+            {
+                Ok(response) => {
+                    if let Some(ttml) = lyrics_ttml(&response) {
+                        return ttml_to_lrc(ttml);
+                    }
+                }
+                Err(AppleMusicApiError::UpstreamHttp { status, .. }) if status.as_u16() == 404 => {
+                    last_error = Some(AppleMusicApiError::UpstreamHttp {
+                        status,
+                        message: format!("apple api request failed: {status}"),
+                        retry_after: None,
+                    });
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        Err(last_error
+            .unwrap_or_else(|| AppleMusicApiError::Message("failed to get lyrics".into())))
+    }
+
+    async fn lyrics_response(
+        &self,
+        storefront: &str,
+        language: Option<&str>,
+        music_token: &str,
+        song_id: &str,
+        endpoint: &str,
+    ) -> ApiResult<Value> {
         let web_token = self.web_token(false).await?;
+        let path = format!("/v1/catalog/{storefront}/songs/{song_id}/{endpoint}");
+        let params = [("extend", "ttmlLocalizations".into())];
         let result = self
             .catalog_json(
-                format!("/v1/catalog/{storefront}/songs/{song_id}/lyrics"),
+                path.clone(),
                 language,
                 &web_token,
                 Some(music_token),
-                &[("extend", "ttmlLocalizations".into())],
+                &params,
             )
             .await;
-        let response = if let Err(AppleMusicApiError::UpstreamHttp { status, .. }) = &result
+        if let Err(AppleMusicApiError::UpstreamHttp { status, .. }) = &result
             && matches!(
                 *status,
                 reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
-            ) {
-            let refreshed_web_token = self.web_token(true).await?;
-            self.catalog_json(
-                format!("/v1/catalog/{storefront}/songs/{song_id}/lyrics"),
-                language,
-                &refreshed_web_token,
-                Some(music_token),
-                &[("extend", "ttmlLocalizations".into())],
             )
-            .await?
-        } else {
-            result?
-        };
-        let ttml = response
-            .pointer("/data/0/attributes/ttml")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .or_else(|| {
-                response
-                    .pointer("/data/0/attributes/ttmlLocalizations")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.is_empty())
-            })
-            .ok_or_else(|| AppleMusicApiError::Message("failed to get lyrics".into()))?;
-        ttml_to_lrc(ttml)
+        {
+            let refreshed_web_token = self.web_token(true).await?;
+            return self
+                .catalog_json(
+                    path,
+                    language,
+                    &refreshed_web_token,
+                    Some(music_token),
+                    &params,
+                )
+                .await;
+        }
+        result
     }
 
     async fn catalog<T: serde::de::DeserializeOwned>(
@@ -647,6 +672,19 @@ fn retry_after_ttl(retry_after: Option<&str>) -> Duration {
         .map(Duration::from_secs)
         .filter(|value| !value.is_zero())
         .unwrap_or(SEARCH_RATE_LIMIT_TTL)
+}
+
+fn lyrics_ttml(response: &Value) -> Option<&str> {
+    response
+        .pointer("/data/0/attributes/ttml")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            response
+                .pointer("/data/0/attributes/ttmlLocalizations")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+        })
 }
 
 fn extract_index_js_path(homepage: &str) -> ApiResult<&str> {
