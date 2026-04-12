@@ -1,11 +1,6 @@
-# wrapper-rs
+# Apple Music API
 
 Rust rewrite of the original [wrapper](https://github.com/WorldObservationLog/wrapper) and [go-api](https://github.com/akinazuki/apple-music-downloader/blob/main/API.md) flow for `x86_64-linux-android`.
-
-This repository currently ships two binaries:
-
-- `main`: daemon runtime that serves the HTTP API
-- `wrapper`: launcher that enters `./rootfs`, prepares runtime devices, and execs `/system/bin/main`
 
 ## Build
 
@@ -15,21 +10,10 @@ This repository currently ships two binaries:
 ANDROID_NDK_HOME="/opt/homebrew/share/android-ndk" cargo ndk -t x86_64 build --release
 ```
 
-The release binary is `target/x86_64-linux-android/release/wrapper`.
+The release binary is `target/x86_64-linux-android/release/main`.
 
-Canonical local build wrapper:
 
-```bash
-./scripts/build-android.sh
-```
 
-### Host build (for local debug)
-
-```bash
-cargo build --release
-```
-
-The daemon binary is `target/release/main`.
 
 ## Run
 
