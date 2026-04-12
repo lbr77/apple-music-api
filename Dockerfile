@@ -116,6 +116,9 @@ FROM debian:bookworm-slim AS rootfs
 
 ARG ROOTFS_ARCHIVE_URL="https://github.com/WorldObservationLog/wrapper/archive/refs/heads/main.tar.gz"
 
+# Android's dynamic loader must stay executable. Containerd refuses to start
+# `/main` when the archived rootfs ships `system/bin/linker64` without the
+# execute bit.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl tar \
     && rm -rf /var/lib/apt/lists/* \
@@ -124,7 +127,8 @@ RUN apt-get update \
     && tar -xzf /tmp/rootfs/rootfs.tar.gz -C /tmp/rootfs \
     && src_dir="$(find /tmp/rootfs -mindepth 2 -maxdepth 2 -type d -name rootfs | head -n 1)" \
     && test -n "$src_dir" \
-    && cp -a "$src_dir" /out/rootfs
+    && cp -a "$src_dir" /out/rootfs \
+    && chmod 0755 /out/rootfs/system/bin/linker64
 
 FROM scratch
 

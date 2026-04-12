@@ -67,14 +67,14 @@ Container examples:
 docker run --rm -p 8080:8080 \
 	-v ./persist/com.apple.android.music:/data/data/com.apple.android.music \
 	ghcr.io/<owner>/<repo>:latest \
-	/system/bin/main --host 0.0.0.0 --daemon-port 8080
+	--host 0.0.0.0 --daemon-port 8080
 ```
 
 ```yaml
 services:
 	wrapper:
 		image: ghcr.io/<owner>/<repo>:latest
-		command: ["/system/bin/main", "--host", "0.0.0.0", "--daemon-port", "8080"]
+		command: ["--host", "0.0.0.0", "--daemon-port", "8080"]
 		ports:
 			- "8080:8080"
 		volumes:
