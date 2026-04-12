@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 use std::sync::LazyLock;
 
+use mp4ameta::{Img, Tag};
 use regex::Regex;
 use reqwest::Proxy;
 use reqwest::blocking::{Client, ClientBuilder};
@@ -23,7 +24,6 @@ use super::mp4;
 const DESKTOP_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
 pub(crate) const FFMPEG_BINARY: &str = "/usr/local/bin/ffmpeg";
 pub(crate) const FFPROBE_BINARY: &str = "/usr/local/bin/ffprobe";
-pub(crate) const MP4BOX_BINARY: &str = "/usr/bin/MP4Box";
 
 static ATTR_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"([A-Z0-9-]+)=(".*?"|[^,]+)"#).expect("valid attribute regex"));
@@ -56,7 +56,6 @@ pub struct BinaryHealth {
 pub struct ToolHealthReport {
     pub ffmpeg: BinaryHealth,
     pub ffprobe: BinaryHealth,
-    pub mp4box: BinaryHealth,
 }
 
 impl ToolHealthReport {
@@ -84,6 +83,7 @@ pub struct PlaybackTrackMetadata {
     pub disc_number: u32,
     pub artwork: Option<ArtworkDescriptor>,
     pub album_artwork: Option<ArtworkDescriptor>,
+    pub lyrics: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -96,7 +96,6 @@ pub fn tool_health_report() -> ToolHealthReport {
     ToolHealthReport {
         ffmpeg: inspect_binary(FFMPEG_BINARY),
         ffprobe: inspect_binary(FFPROBE_BINARY),
-        mp4box: inspect_binary(MP4BOX_BINARY),
     }
 }
 
@@ -226,23 +225,13 @@ pub fn download_playback(
     }
     fragmented.flush()?;
 
-    let mp4box_available = inspect_binary(MP4BOX_BINARY).available;
-
     remux_output(
         is_aac_variant,
         &fragmented_path,
         &aac_path,
         &final_temp_path,
     )?;
-    if mp4box_available {
-        embed_mp4box_tags(&client, &track, &album_dir, &song_id, &final_temp_path)?;
-    } else {
-        crate::app_warn!(
-            "daemon::download",
-            "skipping playback metadata tagging because {} is unavailable",
-            MP4BOX_BINARY
-        );
-    }
+    embed_mp4_tags(&client, &track, &final_temp_path)?;
     fs::rename(&final_temp_path, &final_path)?;
 
     for path in [&fragmented_path, &aac_path, &init_probe_path] {
@@ -573,7 +562,7 @@ fn remux_output(
     final_path: &Path,
 ) -> AppResult<()> {
     // Keep audio remux aligned with the upstream downloader: audio-only output is assembled
-    // once and then tagged in place, while MP4Box muxing remains reserved for MV-style
+    // once and then tagged in place instead of carrying fragmented MP4 metadata forward.
     // multi-track assembly.
     let input = if is_aac_variant {
         aac_path
@@ -593,68 +582,65 @@ fn remux_output(
     Ok(())
 }
 
-fn embed_mp4box_tags(
+fn embed_mp4_tags(
     client: &Client,
     track: &PlaybackTrackMetadata,
-    album_dir: &Path,
-    song_id: &str,
     final_path: &Path,
 ) -> AppResult<()> {
-    let cover_path = download_cover_artwork(client, track, album_dir, song_id)?;
-    let tags_path = album_dir.join(format!("{song_id}.itags.txt"));
-    let tmp_dir = album_dir.join(".mp4box-tmp").join(song_id);
-    fs::create_dir_all(&tmp_dir)?;
-    fs::write(
-        &tags_path,
-        build_mp4box_tag_file(track, cover_path.as_deref()),
-    )?;
+    let mut tag = Tag::read_from_path(final_path)?;
+    tag.set_artist(track.artist.clone());
+    tag.set_album_artist(track.artist.clone());
+    tag.set_title(track.title.clone());
+    tag.set_album(track.album.clone());
+    tag.set_track_number(u16::try_from(track.track_number).map_err(|error| {
+        AppError::Protocol(format!(
+            "track number does not fit in mp4 tag field: {error}"
+        ))
+    })?);
+    tag.set_disc_number(u16::try_from(track.disc_number).map_err(|error| {
+        AppError::Protocol(format!(
+            "disc number does not fit in mp4 tag field: {error}"
+        ))
+    })?);
 
-    let args = [
-        "-tmp".into(),
-        tmp_dir.to_string_lossy().into_owned(),
-        "-itags".into(),
-        tags_path.to_string_lossy().into_owned(),
-        final_path.to_string_lossy().into_owned(),
-    ];
-    let output = run_binary("embed MP4 tags", MP4BOX_BINARY, &args)?;
-
-    if !output.status.success() {
-        return Err(command_failure_error(
-            "embed MP4 tags",
-            MP4BOX_BINARY,
-            &args,
-            &output,
-        ));
+    if let Some(lyrics) = track.lyrics.as_deref().filter(|lyrics| !lyrics.is_empty()) {
+        tag.set_lyrics(lyrics.to_owned());
     }
 
-    // Leave the tag manifest and artwork behind on failure so container-only I/O bugs
-    // can be inspected directly from the cache directory.
-    let _ = fs::remove_file(&tags_path);
-    if let Some(cover_path) = &cover_path {
-        let _ = fs::remove_file(cover_path);
+    if let Some(artwork) = download_cover_artwork(client, track)? {
+        tag.set_artwork(artwork);
     }
-    let _ = fs::remove_dir(&tmp_dir);
+
+    tag.write_to_path(final_path)?;
     Ok(())
 }
 
 fn download_cover_artwork(
     client: &Client,
     track: &PlaybackTrackMetadata,
-    album_dir: &Path,
-    song_id: &str,
-) -> AppResult<Option<String>> {
+) -> AppResult<Option<Img<Vec<u8>>>> {
     let artwork = track.artwork.as_ref().or(track.album_artwork.as_ref());
     let Some(artwork) = artwork else {
         return Ok(None);
     };
 
-    let cover_path = album_dir.join(format!("{song_id}.cover.jpg"));
     let response = client
         .get(artwork_url(artwork))
         .send()?
         .error_for_status()?;
-    fs::write(&cover_path, response.bytes()?.as_ref())?;
-    Ok(Some(cover_path.to_string_lossy().into_owned()))
+    let bytes = response.bytes()?.to_vec();
+    let image = if is_jpeg(&bytes) {
+        Img::jpeg(bytes)
+    } else if is_png(&bytes) {
+        Img::png(bytes)
+    } else if is_bmp(&bytes) {
+        Img::bmp(bytes)
+    } else {
+        return Err(AppError::Protocol(
+            "downloaded artwork is not a supported JPEG/PNG/BMP image".into(),
+        ));
+    };
+    Ok(Some(image))
 }
 
 fn artwork_url(artwork: &ArtworkDescriptor) -> String {
@@ -666,21 +652,16 @@ fn artwork_url(artwork: &ArtworkDescriptor) -> String {
         .replace("{h}", &height.to_string())
 }
 
-fn build_mp4box_tag_file(track: &PlaybackTrackMetadata, cover_path: Option<&str>) -> String {
-    let mut lines = vec![
-        "tool=".to_owned(),
-        format!("artist={}", track.artist),
-        format!("performer={}", track.artist),
-        format!("album_artist={}", track.artist),
-        format!("album={}", track.album),
-        format!("title={}", track.title),
-        format!("tracknum={}", track.track_number),
-        format!("disk={}", track.disc_number),
-    ];
-    if let Some(cover_path) = cover_path {
-        lines.push(format!("cover={cover_path}"));
-    }
-    lines.join("\n")
+fn is_jpeg(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+}
+
+fn is_png(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n'])
+}
+
+fn is_bmp(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"BM")
 }
 
 fn detect_codec_label(path: &Path) -> AppResult<String> {

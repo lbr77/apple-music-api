@@ -10,7 +10,7 @@ All endpoints require `Authorization: Bearer <api-token>`.
 
 Report daemon state and external media tool availability from the fixed `/usr/local/bin` runtime paths.
 
-`ffmpeg`, `ffprobe`, and `MP4Box` are all required for a healthy status. Playback uses `ffmpeg` for audio remux and `MP4Box` for the final `-itags` metadata pass.
+`ffmpeg` and `ffprobe` are required for a healthy status. Playback uses `ffmpeg` for audio remux and writes final MP4 metadata directly in Rust.
 
 **Example**
 
@@ -23,8 +23,7 @@ curl -H "Authorization: Bearer <api-token>" "http://localhost:8080/health"
   "status": "ok",
   "state": "logged_in",
   "ffmpeg": { "path": "/usr/local/bin/ffmpeg", "available": true, "version": "ffmpeg version 7.0.2-static" },
-  "ffprobe": { "path": "/usr/local/bin/ffprobe", "available": true, "version": "ffprobe version 7.0.2-static" },
-  "mp4box": { "path": "/usr/local/bin/MP4Box", "available": true, "version": "MP4Box - GPAC version 2.5-DEV-rev0-g..." }
+  "ffprobe": { "path": "/usr/local/bin/ffprobe", "available": true, "version": "ffprobe version 7.0.2-static" }
 }
 ```
 
@@ -344,6 +343,7 @@ curl -H "Authorization: Bearer <api-token>" "http://localhost:8080/song/14807854
 Download and cache the audio file for a song. Returns playback info once the file is ready.
 
 The file is cached at `./cache/albums/<albumId>/<songId>.m4a`.
+When lyrics are available for the song, the cached `.m4a` also embeds them as MP4 metadata.
 
 **Path Parameters**
 

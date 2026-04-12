@@ -49,8 +49,8 @@ curl -H "Authorization: Bearer local-dev-token" http://127.0.0.1:8080/health
 
 All daemon endpoints require `Authorization: Bearer <api-token>`.
 
-The daemon expects `ffmpeg`, `ffprobe`, and `MP4Box` at `/usr/local/bin`.
-Playback assembly uses `ffmpeg` for audio remux and `MP4Box` for the final `-itags` metadata pass.
+The daemon expects `ffmpeg` and `ffprobe` at `/usr/local/bin`.
+Playback assembly uses `ffmpeg` for audio remux and writes final MP4 metadata directly in Rust.
 
 ## Deployment
 
@@ -148,8 +148,9 @@ curl -X POST http://127.0.0.1:8080/logout \
 - Audio: `./cache/albums/<albumId>/<songId>.m4a`
 
 `GET /playback/{id}?redirect=true` returns HTTP 302 to the cached `.m4a` file under `/cache/...`.
+When lyrics are available from Apple Music, the cached `.m4a` also embeds them as MP4 metadata.
 
-The Docker image already bundles `MP4Box`, `ffmpeg`, and `ffprobe`, so `/health` exposes all three tool reports at runtime.
+The Docker image already bundles `ffmpeg` and `ffprobe`, so `/health` exposes both tool reports at runtime.
 
 ## Legacy TCP Notes
 

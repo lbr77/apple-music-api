@@ -18,6 +18,8 @@ pub enum AppleMusicDecryptorError {
     Http(#[from] reqwest::Error),
     #[error("mp4 error: {0}")]
     Mp4(#[from] crate::mp4::Mp4Error),
+    #[error("mp4 metadata error: {0}")]
+    Mp4Metadata(#[from] mp4ameta::Error),
     #[error("libloading error: {0}")]
     Library(#[from] libloading::Error),
     #[error("invalid device info: {0}")]

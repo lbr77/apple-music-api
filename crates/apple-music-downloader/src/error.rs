@@ -71,6 +71,7 @@ impl From<AppleMusicDecryptorError> for AppError {
             AppleMusicDecryptorError::Json(error) => Self::Message(error.to_string()),
             AppleMusicDecryptorError::Http(error) => Self::Message(error.to_string()),
             AppleMusicDecryptorError::Mp4(error) => Self::Message(error.to_string()),
+            AppleMusicDecryptorError::Mp4Metadata(error) => Self::Message(error.to_string()),
             AppleMusicDecryptorError::Library(error) => Self::Message(error.to_string()),
             AppleMusicDecryptorError::InvalidDeviceInfo(message) => {
                 Self::InvalidDeviceInfo(message)

@@ -218,7 +218,6 @@ async fn health_handler(State(context): State<Arc<DaemonContext>>) -> Response {
             "state": state_name(&context.state),
             "ffmpeg": report.ffmpeg,
             "ffprobe": report.ffprobe,
-            "mp4box": report.mp4box,
         })),
     )
         .into_response()
@@ -515,9 +514,32 @@ async fn playback_handler(
             &song_id,
         )
         .await?;
+    // Keep audio downloads working for tracks that Apple serves without lyrics.
+    let lyrics = match context
+        .api
+        .lyrics(
+            &storefront,
+            context.default_language(),
+            &profile.dev_token,
+            &profile.music_token,
+            &song_id,
+        )
+        .await
+    {
+        Ok(lyrics) => Some(lyrics),
+        Err(error) => {
+            crate::app_warn!(
+                "daemon::playback",
+                "lyrics fetch failed for song {}: {}",
+                song_id,
+                error
+            );
+            None
+        }
+    };
     let config = context.config.download_config();
     let request = PlaybackRequest {
-        metadata: playback_track_metadata(metadata),
+        metadata: playback_track_metadata(metadata, lyrics),
         requested_codec: params.codec.clone(),
     };
 
@@ -572,7 +594,10 @@ fn playback_response(playback: PlaybackOutput) -> serde_json::Value {
     })
 }
 
-fn playback_track_metadata(metadata: SongPlaybackMetadata) -> PlaybackTrackMetadata {
+fn playback_track_metadata(
+    metadata: SongPlaybackMetadata,
+    lyrics: Option<String>,
+) -> PlaybackTrackMetadata {
     PlaybackTrackMetadata {
         song_id: metadata.song_id,
         artist: metadata.artist,
@@ -584,6 +609,7 @@ fn playback_track_metadata(metadata: SongPlaybackMetadata) -> PlaybackTrackMetad
         disc_number: metadata.disc_number,
         artwork: metadata.artwork.map(playback_artwork),
         album_artwork: metadata.album_artwork.map(playback_artwork),
+        lyrics,
     }
 }
 

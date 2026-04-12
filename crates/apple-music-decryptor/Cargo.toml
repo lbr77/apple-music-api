@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 libc.workspace = true
 libloading.workspace = true
+mp4ameta.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 serde.workspace = true
