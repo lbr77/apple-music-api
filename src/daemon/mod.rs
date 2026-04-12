@@ -20,7 +20,7 @@ use crate::error::{AppError, AppResult};
 use crate::ffi::{LoginAttempt, LoginWaitState, NativePlatform};
 use crate::runtime::{AppState, SessionRuntime};
 
-use self::api::{AppleApiClient, SearchRequest};
+use self::api::{AppleApiClient, ArtistViewRequest, SearchRequest};
 use self::download::{PlaybackOutput, tool_health_report};
 
 #[derive(Clone)]
@@ -343,8 +343,6 @@ async fn search_handler(
         )));
     }
 
-    let session = context.session()?;
-    let profile = session.account_profile();
     let storefront = params
         .storefront
         .as_deref()
@@ -354,7 +352,6 @@ async fn search_handler(
         .search(SearchRequest {
             storefront,
             language: context.default_language(),
-            dev_token: &profile.dev_token,
             query: &params.query,
             search_type: &params.search_type,
             limit: params.limit,
@@ -448,15 +445,15 @@ async fn artist_view_handler(
         .unwrap_or(context.default_storefront());
     let response = context
         .api
-        .artist_view(
+        .artist_view(ArtistViewRequest {
             storefront,
-            context.default_language(),
-            &profile.dev_token,
-            &artist_id,
-            &view_name,
-            params.limit,
-            params.offset,
-        )
+            language: context.default_language(),
+            dev_token: &profile.dev_token,
+            artist_id: &artist_id,
+            view_name: &view_name,
+            limit: params.limit,
+            offset: params.offset,
+        })
         .await?;
     Ok(Json(response))
 }

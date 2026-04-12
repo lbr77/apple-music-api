@@ -1,7 +1,8 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
+use regex::Regex;
 use reqwest::header::{AUTHORIZATION, COOKIE, ORIGIN, REFERER};
 use reqwest::{Client, Proxy};
 use roxmltree::Document;
@@ -17,17 +18,32 @@ const SEARCH_CACHE_TTL: Duration = Duration::from_secs(15);
 const SEARCH_THROTTLE_WINDOW: Duration = Duration::from_millis(400);
 const SEARCH_RATE_LIMIT_TTL: Duration = Duration::from_secs(2);
 const SEARCH_MAX_CONCURRENCY: usize = 1;
+const WEB_TOKEN_TTL: Duration = Duration::from_secs(30 * 60);
 const DEFAULT_ARTIST_INCLUDE: &str = "genres,station";
 const DEFAULT_ARTIST_VIEWS: &str = "top-songs,latest-release,full-albums,singles,featured-playlists,playlists,similar-artists,top-music-videos";
+static INDEX_JS_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"/assets/index~[^/"']+\.js"#).expect("index js regex should compile")
+});
+static WEB_TOKEN_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"eyJh[^"']*"#).expect("web token regex should compile"));
 
 pub(crate) struct SearchRequest<'a> {
     pub storefront: &'a str,
     pub language: Option<&'a str>,
-    pub dev_token: &'a str,
     pub query: &'a str,
     pub search_type: &'a str,
     pub limit: usize,
     pub offset: usize,
+}
+
+pub(crate) struct ArtistViewRequest<'a> {
+    pub storefront: &'a str,
+    pub language: Option<&'a str>,
+    pub dev_token: &'a str,
+    pub artist_id: &'a str,
+    pub view_name: &'a str,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 impl SearchRequest<'_> {
@@ -84,6 +100,11 @@ struct CachedUpstreamError {
     retry_after: Option<String>,
 }
 
+struct WebTokenCacheEntry {
+    token: String,
+    expires_at: Instant,
+}
+
 impl CachedUpstreamError {
     fn into_app_error(self) -> AppError {
         AppError::UpstreamHttp {
@@ -101,6 +122,7 @@ pub struct AppleApiClient {
     search_inflight: Arc<Mutex<HashMap<SearchCacheKey, Arc<Notify>>>>,
     search_gate: Arc<Semaphore>,
     search_next_allowed_at: Arc<Mutex<Instant>>,
+    web_token: Arc<Mutex<Option<WebTokenCacheEntry>>>,
 }
 
 impl AppleApiClient {
@@ -115,6 +137,7 @@ impl AppleApiClient {
             search_inflight: Arc::new(Mutex::new(HashMap::new())),
             search_gate: Arc::new(Semaphore::new(SEARCH_MAX_CONCURRENCY)),
             search_next_allowed_at: Arc::new(Mutex::new(Instant::now())),
+            web_token: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -275,28 +298,22 @@ impl AppleApiClient {
         .await
     }
 
-    pub async fn artist_view(
-        &self,
-        storefront: &str,
-        language: Option<&str>,
-        dev_token: &str,
-        artist_id: &str,
-        view_name: &str,
-        limit: Option<usize>,
-        offset: Option<usize>,
-    ) -> AppResult<Value> {
+    pub async fn artist_view(&self, request: ArtistViewRequest<'_>) -> AppResult<Value> {
         let mut params = Vec::new();
-        if let Some(limit) = limit {
+        if let Some(limit) = request.limit {
             params.push(("limit", limit.to_string()));
         }
-        if let Some(offset) = offset {
+        if let Some(offset) = request.offset {
             params.push(("offset", offset.to_string()));
         }
 
         self.catalog_json(
-            format!("/v1/catalog/{storefront}/artists/{artist_id}/view/{view_name}"),
-            language,
-            dev_token,
+            format!(
+                "/v1/catalog/{}/artists/{}/view/{}",
+                request.storefront, request.artist_id, request.view_name
+            ),
+            request.language,
+            request.dev_token,
             None,
             &params,
         )
@@ -388,19 +405,55 @@ impl AppleApiClient {
             .await
             .expect("search semaphore should stay open");
         self.throttle_search().await;
-        self.catalog_json(
-            format!("/v1/catalog/{}/search", request.storefront),
-            request.language,
-            request.dev_token,
-            None,
-            &[
-                ("term", request.query.trim().to_owned()),
-                ("types", format!("{}s", request.search_type)),
-                ("limit", request.limit.to_string()),
-                ("offset", request.offset.to_string()),
-            ],
-        )
-        .await
+        self.search_catalog_with_web_token(request, false).await
+    }
+
+    async fn search_catalog_with_web_token(
+        &self,
+        request: &SearchRequest<'_>,
+        refresh_token: bool,
+    ) -> AppResult<Value> {
+        let web_token = self.web_token(refresh_token).await?;
+        let result = self
+            .catalog_json(
+                format!("/v1/catalog/{}/search", request.storefront),
+                request.language,
+                &web_token,
+                None,
+                &[
+                    ("term", request.query.trim().to_owned()),
+                    ("types", format!("{}s", request.search_type)),
+                    ("limit", request.limit.to_string()),
+                    ("offset", request.offset.to_string()),
+                ],
+            )
+            .await;
+
+        if !refresh_token
+            && let Err(AppError::UpstreamHttp { status, .. }) = &result
+            && matches!(
+                *status,
+                reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+            )
+        {
+            let refreshed_web_token = self.web_token(true).await?;
+            return self
+                .catalog_json(
+                    format!("/v1/catalog/{}/search", request.storefront),
+                    request.language,
+                    &refreshed_web_token,
+                    None,
+                    &[
+                        ("term", request.query.trim().to_owned()),
+                        ("types", format!("{}s", request.search_type)),
+                        ("limit", request.limit.to_string()),
+                        ("offset", request.offset.to_string()),
+                    ],
+                )
+                .await;
+        }
+
+        result
     }
 
     async fn throttle_search(&self) {
@@ -446,6 +499,41 @@ impl AppleApiClient {
             notify.notify_waiters();
         }
     }
+
+    async fn web_token(&self, refresh: bool) -> AppResult<String> {
+        if !refresh && let Some(cached) = self.cached_web_token().await {
+            return Ok(cached);
+        }
+
+        let token = self.fetch_web_token().await?;
+        let mut web_token = self.web_token.lock().await;
+        *web_token = Some(WebTokenCacheEntry {
+            token: token.clone(),
+            expires_at: Instant::now() + WEB_TOKEN_TTL,
+        });
+        Ok(token)
+    }
+
+    async fn cached_web_token(&self) -> Option<String> {
+        let web_token = self.web_token.lock().await;
+        web_token
+            .as_ref()
+            .filter(|cached| cached.expires_at > Instant::now())
+            .map(|cached| cached.token.clone())
+    }
+
+    async fn fetch_web_token(&self) -> AppResult<String> {
+        let homepage = self.client.get(MUSIC_ORIGIN).send().await?.text().await?;
+        let index_js_path = extract_index_js_path(&homepage)?;
+        let script = self
+            .client
+            .get(format!("{MUSIC_ORIGIN}{index_js_path}"))
+            .send()
+            .await?
+            .text()
+            .await?;
+        extract_web_token(&script)
+    }
 }
 
 fn retry_after_ttl(retry_after: Option<&str>) -> Duration {
@@ -454,6 +542,24 @@ fn retry_after_ttl(retry_after: Option<&str>) -> Duration {
         .map(Duration::from_secs)
         .filter(|value| !value.is_zero())
         .unwrap_or(SEARCH_RATE_LIMIT_TTL)
+}
+
+fn extract_index_js_path(homepage: &str) -> AppResult<&str> {
+    INDEX_JS_REGEX
+        .find(homepage)
+        .map(|capture| capture.as_str())
+        .ok_or_else(|| {
+            AppError::Protocol("music.apple.com homepage did not contain index js".into())
+        })
+}
+
+fn extract_web_token(script: &str) -> AppResult<String> {
+    WEB_TOKEN_REGEX
+        .find(script)
+        .map(|capture| capture.as_str().to_owned())
+        .ok_or_else(|| {
+            AppError::Protocol("music.apple.com script did not contain web token".into())
+        })
 }
 
 fn append_album_tracks(album: &mut Value, mut next_page: Value) -> AppResult<()> {
@@ -575,7 +681,25 @@ fn parse_ttml_timestamp(value: &str) -> AppResult<(u32, u32, u32)> {
 mod tests {
     use std::time::Duration;
 
-    use super::retry_after_ttl;
+    use super::{extract_index_js_path, extract_web_token, retry_after_ttl};
+
+    #[test]
+    fn extract_index_js_path_finds_music_web_bundle() {
+        let homepage = r#"<script type="module" src="/assets/index~en-US.abcd1234.js"></script>"#;
+        assert_eq!(
+            extract_index_js_path(homepage).expect("index js path"),
+            "/assets/index~en-US.abcd1234.js"
+        );
+    }
+
+    #[test]
+    fn extract_web_token_finds_jwt_like_value() {
+        let script = r#"const token="eyJh.fake.web.token";"#;
+        assert_eq!(
+            extract_web_token(script).expect("web token"),
+            "eyJh.fake.web.token"
+        );
+    }
 
     #[test]
     fn retry_after_ttl_uses_numeric_header_value() {
