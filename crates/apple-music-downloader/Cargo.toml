@@ -1,0 +1,21 @@
+[package]
+name = "apple-music-downloader"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "main"
+path = "src/bin/main.rs"
+
+[dependencies]
+apple-music-api = { path = "../apple-music-api" }
+apple-music-decryptor = { path = "../apple-music-decryptor" }
+axum.workspace = true
+clap.workspace = true
+num_cpus.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower-http.workspace = true

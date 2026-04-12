@@ -62,6 +62,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "apple-music-api"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "reqwest",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "apple-music-decryptor"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "libc",
+ "libloading",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "apple-music-downloader"
+version = "0.1.0"
+dependencies = [
+ "apple-music-api",
+ "apple-music-decryptor",
+ "axum",
+ "clap",
+ "num_cpus",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tower-http",
+]
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1615,26 +1659,6 @@ name = "wit-bindgen"
 version = "0.51.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7249219f66ced02969388cf2bb044a09756a083d0fab1e566056b04d9fbcaa5"
-
-[[package]]
-name = "wrapper-rust"
-version = "0.1.0"
-dependencies = [
- "axum",
- "cc",
- "clap",
- "libc",
- "libloading",
- "num_cpus",
- "regex",
- "reqwest",
- "roxmltree",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tower-http",
-]
 
 [[package]]
 name = "writeable"
