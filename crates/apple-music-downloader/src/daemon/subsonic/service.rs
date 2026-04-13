@@ -1,5 +1,6 @@
 use apple_music_api::{Artwork, SearchRequest, SongPlaybackMetadata};
 use apple_music_decryptor::{ArtworkDescriptor, PlaybackTrackMetadata};
+use reqwest::StatusCode;
 
 use super::data::{
     album_detail_to_subsonic, artwork_template, render_artwork_url, search_results,
@@ -7,6 +8,7 @@ use super::data::{
 };
 use super::error::{SubsonicError, map_app_error};
 use super::{DaemonContext, ResponseFormat};
+use crate::error::AppError;
 
 pub(super) async fn load_song(
     context: &DaemonContext,
@@ -51,7 +53,8 @@ pub(super) async fn load_lyrics(
             song_id,
         )
         .await
-        .map_err(|error| map_app_error(format, error.into()))
+        .map_err(AppError::from)
+        .or_else(|error| lyrics_not_found_as_empty(error, format))
 }
 
 pub(super) async fn load_lyrics_optional(context: &DaemonContext, song_id: &str) -> Option<String> {
@@ -210,7 +213,7 @@ pub(super) fn requested_codec(
     let format = format.unwrap_or("").trim().to_ascii_lowercase();
     let codec = match format.as_str() {
         "" | "raw" | "m4a" | "mp4" => {
-            if max_bit_rate.is_some() {
+            if bitrate_limit_requests_transcoding(max_bit_rate) {
                 Some("aac".to_owned())
             } else {
                 None
@@ -226,6 +229,23 @@ pub(super) fn requested_codec(
         }
     };
     Ok(codec)
+}
+
+pub(super) fn lyrics_not_found_as_empty(
+    error: AppError,
+    format: ResponseFormat,
+) -> Result<String, SubsonicError> {
+    match error {
+        // Subsonic getLyrics returns an empty payload when a track has no lyrics.
+        AppError::UpstreamHttp { status, .. } if status == StatusCode::NOT_FOUND => {
+            Ok(String::new())
+        }
+        other => Err(map_app_error(format, other)),
+    }
+}
+
+fn bitrate_limit_requests_transcoding(max_bit_rate: Option<u32>) -> bool {
+    max_bit_rate.is_some_and(|value| value > 0)
 }
 
 pub(super) fn playback_track_metadata(

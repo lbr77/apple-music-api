@@ -38,6 +38,10 @@ docker run --rm -p 8080:8080 \
   --api-token local-dev-token
 ```
 
+Subsonic clients use `/rest/*` with Subsonic credentials from `SUBSONIC_USERNAME` and
+`SUBSONIC_PASSWORD`. That surface accepts standard Subsonic query auth and does not use the
+daemon Bearer token.
+
 ## Local build
 
 The workspace targets `x86_64-linux-android` by default.

@@ -215,7 +215,8 @@ pub(super) async fn get_artist_handler(
             &profile.dev_token,
             &query.id,
             Some("full-albums,singles,latest-release"),
-            Some(200),
+            // Apple rejects large artist limits for this view set on some catalogs.
+            None,
         )
         .await
         .map_err(|error| map_app_error(format, error.into()))?;

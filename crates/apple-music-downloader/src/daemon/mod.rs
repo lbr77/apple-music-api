@@ -25,6 +25,8 @@ pub async fn run_daemon_server(
     let context = Arc::new(DaemonContext::new(config.clone(), platform, state)?);
     let app = Router::new()
         .merge(http::legacy_routes(Arc::clone(&context)))
+        // Subsonic clients authenticate with Subsonic query credentials, so these routes stay on
+        // a separate router and keep the Bearer middleware out of the /rest surface.
         .merge(subsonic::router(Arc::clone(&context)))
         .with_state(context);
 

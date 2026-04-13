@@ -101,23 +101,38 @@ pub(super) struct LyricsQuery {
 pub(super) fn router(context: Arc<DaemonContext>) -> Router<Arc<DaemonContext>> {
     Router::new()
         .route("/rest/ping.view", get(handlers::ping_handler))
+        .route("/rest/ping", get(handlers::ping_handler))
         .route("/rest/getLicense.view", get(handlers::get_license_handler))
+        .route("/rest/getLicense", get(handlers::get_license_handler))
         .route(
             "/rest/getMusicFolders.view",
             get(handlers::get_music_folders_handler),
         )
+        .route(
+            "/rest/getMusicFolders",
+            get(handlers::get_music_folders_handler),
+        )
         .route("/rest/getArtists.view", get(handlers::get_artists_handler))
+        .route("/rest/getArtists", get(handlers::get_artists_handler))
         .route("/rest/getIndexes.view", get(handlers::get_indexes_handler))
+        .route("/rest/getIndexes", get(handlers::get_indexes_handler))
         .route("/rest/search3.view", get(handlers::search3_handler))
+        .route("/rest/search3", get(handlers::search3_handler))
         .route("/rest/getArtist.view", get(handlers::get_artist_handler))
+        .route("/rest/getArtist", get(handlers::get_artist_handler))
         .route("/rest/getAlbum.view", get(handlers::get_album_handler))
+        .route("/rest/getAlbum", get(handlers::get_album_handler))
         .route("/rest/getSong.view", get(handlers::get_song_handler))
+        .route("/rest/getSong", get(handlers::get_song_handler))
         .route("/rest/getLyrics.view", get(handlers::get_lyrics_handler))
+        .route("/rest/getLyrics", get(handlers::get_lyrics_handler))
         .route(
             "/rest/getCoverArt.view",
             get(handlers::get_cover_art_handler),
         )
+        .route("/rest/getCoverArt", get(handlers::get_cover_art_handler))
         .route("/rest/stream.view", get(handlers::stream_handler))
+        .route("/rest/stream", get(handlers::stream_handler))
         .layer(middleware::from_fn(handlers::log_subsonic_request))
         .layer(middleware::from_fn_with_state(
             context,
@@ -128,11 +143,13 @@ pub(super) fn router(context: Arc<DaemonContext>) -> Router<Arc<DaemonContext>> 
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
+    use reqwest::StatusCode as HttpStatusCode;
 
     use super::auth::{parse_auth_query, validate_auth_credentials};
     use super::render::{escape_xml_attr, subsonic_error_response};
-    use super::service::requested_codec;
+    use super::service::{lyrics_not_found_as_empty, requested_codec};
     use super::{AuthQuery, ResponseFormat};
+    use crate::error::AppError;
 
     #[test]
     fn parse_auth_query_defaults_to_xml() {
@@ -188,6 +205,28 @@ mod tests {
             requested_codec(None, Some("alac"), ResponseFormat::Json).expect("codec"),
             Some("alac".into())
         );
+    }
+
+    #[test]
+    fn requested_codec_keeps_original_stream_when_max_bitrate_is_zero() {
+        assert_eq!(
+            requested_codec(Some(0), None, ResponseFormat::Json).expect("codec"),
+            None
+        );
+    }
+
+    #[test]
+    fn lyrics_not_found_maps_to_empty_payload() {
+        let lyrics = lyrics_not_found_as_empty(
+            AppError::UpstreamHttp {
+                status: HttpStatusCode::NOT_FOUND,
+                message: "apple api request failed: 404 Not Found".into(),
+                retry_after: None,
+            },
+            ResponseFormat::Json,
+        )
+        .expect("empty lyrics");
+        assert!(lyrics.is_empty());
     }
 
     #[test]

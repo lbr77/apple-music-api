@@ -2,7 +2,10 @@
 
 Base URL: `http://localhost:<port>`
 
-All endpoints require `Authorization: Bearer <api-token>`.
+The daemon exposes two authentication models:
+
+- HTTP endpoints outside `/rest/*` require `Authorization: Bearer <api-token>`.
+- Subsonic endpoints under `/rest/*` use standard Subsonic authentication parameters such as `u`, `p`, `t`, `s`, `v`, and `c`.
 
 ---
 
@@ -434,4 +437,42 @@ Cached files are served at `/cache`:
 ```
 GET /cache/albums/<albumId>/<songId>.m4a
 GET /cache/lyrics/<songId>.lrc
+```
+
+---
+
+## Subsonic API
+
+Subsonic routes live under `/rest/*` and use Subsonic authentication only.
+
+Supported endpoints:
+
+- `GET /rest/ping.view`
+- `GET /rest/getLicense.view`
+- `GET /rest/getMusicFolders.view`
+- `GET /rest/getArtists.view`
+- `GET /rest/getIndexes.view`
+- `GET /rest/search3.view`
+- `GET /rest/getArtist.view`
+- `GET /rest/getAlbum.view`
+- `GET /rest/getSong.view`
+- `GET /rest/getLyrics.view`
+- `GET /rest/getCoverArt.view`
+- `GET /rest/stream.view`
+
+Example:
+
+```bash
+curl "http://localhost:8080/rest/ping.view?u=admin&p=admin123&v=1.16.1&c=demo&f=json"
+```
+
+```json
+{
+  "subsonic-response": {
+    "status": "ok",
+    "version": "1.16.1",
+    "type": "wrapper-rs",
+    "serverVersion": "build-id"
+  }
+}
 ```
