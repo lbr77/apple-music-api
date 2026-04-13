@@ -12,6 +12,14 @@ RUN apt-get update \
     && test -x /opt/ffmpeg/ffprobe \
     && rm -f /tmp/ffmpeg.tar.xz
 
+FROM node:22-bookworm AS frontend-builder
+
+WORKDIR /app/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend ./
+RUN npm run build
+
 FROM rust:bookworm AS builder
 
 ARG ANDROID_NDK_URL="https://dl.google.com/android/repository/android-ndk-r25c-linux.zip"
@@ -34,6 +42,7 @@ RUN rustup target add x86_64-linux-android
 
 WORKDIR /app
 COPY . .
+COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 RUN cargo ndk -t x86_64 build --release --bin main
 
 FROM debian:bookworm-slim AS rootfs

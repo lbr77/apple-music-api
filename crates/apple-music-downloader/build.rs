@@ -7,6 +7,7 @@ const FALLBACK_BUILD_VERSION: &str = "00000000";
 
 fn main() {
     println!("cargo:rerun-if-env-changed={BUILD_COMMIT_ENV}");
+    println!("cargo:rerun-if-changed=../../frontend/dist");
 
     // CI/Docker can pass the exact commit explicitly because build contexts usually omit `.git`.
     let version = if let Some(commit) = env::var(BUILD_COMMIT_ENV)

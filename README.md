@@ -42,6 +42,11 @@ Subsonic clients use `/rest/*` with Subsonic credentials from `SUBSONIC_USERNAME
 `SUBSONIC_PASSWORD`. That surface accepts standard Subsonic query auth and does not use the
 daemon Bearer token.
 
+The daemon also serves a minimal web UI at `/app/`. The UI has two screens:
+
+- a Bearer token page
+- a settings page for Apple Music login, 2FA, and logout
+
 ## Local build
 
 The workspace targets `x86_64-linux-android` by default.
@@ -58,6 +63,16 @@ Output:
 
 ```text
 target/x86_64-linux-android/release/main
+```
+
+### Frontend bundle
+
+The frontend lives in [`frontend/`](./frontend) and is bundled into the daemon binary from `frontend/dist`.
+
+```bash
+cd frontend
+npm install
+npm run build
 ```
 
 Use [`API.md`](./API.md) for login flow, route list, request examples, Subsonic usage, and cache behavior.

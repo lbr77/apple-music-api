@@ -7,6 +7,131 @@ The daemon exposes two authentication models:
 - HTTP endpoints outside `/rest/*` require `Authorization: Bearer <api-token>`.
 - Subsonic endpoints under `/rest/*` use standard Subsonic authentication parameters such as `u`, `p`, `t`, `s`, `v`, and `c`.
 
+The daemon also serves a minimal web UI at `GET /app/`. The page itself is public and the browser supplies the Bearer token before calling the protected API routes.
+
+---
+
+## GET /app/
+
+Serve the minimal web UI.
+
+The UI contains:
+
+- a Bearer token page
+- a settings page for Apple Music login, 2FA, and logout
+
+Deep links under `/app/*` resolve to the same `index.html`. Missing static assets under `/app/assets/*` return `404`.
+
+---
+
+## GET /status
+
+Report the current Apple Music session state.
+
+**Example**
+
+```bash
+curl -H "Authorization: Bearer <api-token>" "http://localhost:8080/status"
+```
+
+```json
+{
+  "status": "ok",
+  "state": "logged_out"
+}
+```
+
+---
+
+## POST /login
+
+Submit the Apple Music username and password.
+
+When Apple requires two-factor verification the daemon responds with `status: "need_2fa"` and `state: "awaiting_2fa"`.
+
+**Example**
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer <api-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"username":"name@example.com","password":"secret"}' \
+  "http://localhost:8080/login"
+```
+
+```json
+{
+  "status": "need_2fa",
+  "state": "awaiting_2fa",
+  "message": "verification code required"
+}
+```
+
+---
+
+## POST /login/2fa
+
+Submit the Apple two-factor code after `/login` returns `need_2fa`.
+
+**Example**
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer <api-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"code":"123456"}' \
+  "http://localhost:8080/login/2fa"
+```
+
+```json
+{
+  "status": "ok",
+  "state": "logged_in"
+}
+```
+
+---
+
+## POST /login/reset
+
+Cancel a pending login that is waiting for two-factor verification.
+
+**Example**
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer <api-token>" \
+  "http://localhost:8080/login/reset"
+```
+
+```json
+{
+  "status": "ok",
+  "state": "logged_out"
+}
+```
+
+---
+
+## POST /logout
+
+Clear the active Apple Music session.
+
+**Example**
+
+```bash
+curl -X POST \
+  -H "Authorization: Bearer <api-token>" \
+  "http://localhost:8080/logout"
+```
+
+```json
+{
+  "status": "ok",
+  "state": "logged_out"
+}
+```
+
 ---
 
 ## GET /health

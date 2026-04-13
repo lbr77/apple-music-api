@@ -13,7 +13,9 @@ apple-music-decryptor = { path = "../apple-music-decryptor" }
 axum.workspace = true
 clap.workspace = true
 hex.workspace = true
+include_dir.workspace = true
 md5.workspace = true
+mime_guess.workspace = true
 num_cpus.workspace = true
 reqwest.workspace = true
 serde.workspace = true
