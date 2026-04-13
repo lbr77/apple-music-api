@@ -5,17 +5,14 @@ Apple Music daemon for `x86_64-linux-android`.
 This project boots an Android Apple Music runtime, exposes a small HTTP service, and supports local playback decryption plus a Subsonic-compatible interface. API details, request parameters, and response examples live in [`API.md`](./API.md).
 
 >[!TIP]
-> Notice
 >
 > Full lyrics require `MEDIA_USER_TOKEN`. In this daemon, provide it with `--media-user-token` or `WRAPPER_MEDIA_USER_TOKEN`.
 
 >[!WARNING]
-> Warning
 >
 > Using Apple Music in an unofficial or non-standard environment to download songs may trigger account enforcement, including suspension or termination.
 
 >[!IMPORTANT]
-> Disclaimer
 >
 > This project is provided for research and personal interoperability purposes only. You assume all responsibility for compliance with Apple Music terms, local law, and any account or data risk that follows from using it.
 
