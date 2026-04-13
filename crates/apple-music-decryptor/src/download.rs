@@ -21,7 +21,6 @@ use crate::session::SessionRuntime;
 
 use super::mp4;
 
-const DESKTOP_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
 pub(crate) const FFMPEG_BINARY: &str = "/usr/local/bin/ffmpeg";
 pub(crate) const FFPROBE_BINARY: &str = "/usr/local/bin/ffprobe";
 
@@ -253,7 +252,10 @@ pub fn download_playback(
 }
 
 fn build_client(config: &DownloadConfig) -> AppResult<Client> {
-    let mut builder = ClientBuilder::new().user_agent(DESKTOP_USER_AGENT);
+    let mut builder = ClientBuilder::new().user_agent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+         (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    );
     if let Some(proxy) = config.proxy.as_deref() {
         builder = builder.proxy(Proxy::all(proxy)?);
     }

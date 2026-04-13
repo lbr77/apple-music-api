@@ -7,15 +7,6 @@ use clap::Parser;
 
 use crate::error::{AppError, AppResult};
 
-const DEFAULT_DEVICE_INFO: &str =
-    "Music/4.9/Android/10/Samsung S9/7663313/en-US/en-US/dc28071e981c439e";
-const DEFAULT_BASE_DIR: &str = "/data/data/com.apple.android.music/files";
-const DEFAULT_SUBSONIC_USERNAME: &str = "admin";
-const DEFAULT_SUBSONIC_PASSWORD: &str = "admin123";
-const MEDIA_USER_TOKEN_ENV: &str = "MEDIA_USER_TOKEN";
-const SUBSONIC_USERNAME_ENV: &str = "SUBSONIC_USERNAME";
-const SUBSONIC_PASSWORD_ENV: &str = "SUBSONIC_PASSWORD";
-
 #[derive(Clone, Debug)]
 pub struct AppConfig {
     pub host: IpAddr,
@@ -48,7 +39,11 @@ struct Args {
     media_user_token: Option<String>,
     #[arg(short = 'P', long = "proxy")]
     proxy: Option<String>,
-    #[arg(short = 'B', long = "base-dir", default_value = DEFAULT_BASE_DIR)]
+    #[arg(
+        short = 'B',
+        long = "base-dir",
+        default_value = "/data/data/com.apple.android.music/files"
+    )]
     base_dir: PathBuf,
     #[arg(long = "lib-dir")]
     library_dir: Option<PathBuf>,
@@ -58,7 +53,11 @@ struct Args {
     storefront: String,
     #[arg(long = "language", default_value = "")]
     language: String,
-    #[arg(short = 'I', long = "device-info", default_value = DEFAULT_DEVICE_INFO)]
+    #[arg(
+        short = 'I',
+        long = "device-info",
+        default_value = "Music/4.9/Android/10/Samsung S9/7663313/en-US/en-US/dc28071e981c439e"
+    )]
     device_info: String,
     #[arg(long = "decrypt-workers")]
     decrypt_workers: Option<usize>,
@@ -83,15 +82,15 @@ impl AppConfig {
             api_token: normalize_api_token(args.api_token)?,
             media_user_token: normalize_optional_token(
                 args.media_user_token
-                    .or_else(|| env::var(MEDIA_USER_TOKEN_ENV).ok()),
+                    .or_else(|| env::var("MEDIA_USER_TOKEN").ok()),
             ),
             subsonic_username: normalize_subsonic_username(read_env_with_default(
-                SUBSONIC_USERNAME_ENV,
-                DEFAULT_SUBSONIC_USERNAME,
+                "SUBSONIC_USERNAME",
+                "admin",
             ))?,
             subsonic_password: normalize_subsonic_password(read_env_with_default(
-                SUBSONIC_PASSWORD_ENV,
-                DEFAULT_SUBSONIC_PASSWORD,
+                "SUBSONIC_PASSWORD",
+                "admin123",
             ))?,
             proxy: args.proxy,
             base_dir: args.base_dir,
@@ -178,9 +177,9 @@ fn normalize_optional_token(token: Option<String>) -> Option<String> {
 fn normalize_subsonic_username(username: String) -> AppResult<String> {
     let username = username.trim().to_owned();
     if username.is_empty() {
-        Err(AppError::Message(format!(
-            "subsonic username cannot be empty; set {SUBSONIC_USERNAME_ENV}",
-        )))
+        Err(AppError::Message(
+            "subsonic username cannot be empty; set SUBSONIC_USERNAME".into(),
+        ))
     } else {
         Ok(username)
     }
@@ -189,9 +188,9 @@ fn normalize_subsonic_username(username: String) -> AppResult<String> {
 fn normalize_subsonic_password(password: String) -> AppResult<String> {
     let password = password.trim().to_owned();
     if password.is_empty() {
-        Err(AppError::Message(format!(
-            "subsonic password cannot be empty; set {SUBSONIC_PASSWORD_ENV}",
-        )))
+        Err(AppError::Message(
+            "subsonic password cannot be empty; set SUBSONIC_PASSWORD".into(),
+        ))
     } else {
         Ok(password)
     }

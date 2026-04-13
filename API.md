@@ -96,6 +96,7 @@ By default this endpoint asks Apple Music for:
 | Parameter    | Default        | Description |
 |--------------|----------------|-------------|
 | `storefront` | Config default | Storefront region |
+| `language`   | Config default | Raw Apple Music language query fragment. Plain values become `l=<value>`; structured values like `l[lyrics]=zh-hans-cn&l[script]=zh-Hans` are passed through unchanged. |
 | `views`      | Built-in list  | Comma-separated artist views to request from Apple Music |
 | `limit`      | Apple default  | Per-view item limit applied by Apple Music |
 
@@ -407,6 +408,15 @@ Fetch lyrics for a song in LRC format. Results are cached at `./cache/lyrics/<so
 
 ```bash
 curl -H "Authorization: Bearer <api-token>" "http://localhost:8080/lyrics/1480785411"
+```
+
+Chinese syllable lyrics can be requested explicitly:
+
+```bash
+curl -G -H "Authorization: Bearer <api-token>" \
+  --data-urlencode "storefront=cn" \
+  --data-urlencode "language=l[lyrics]=zh-hans-cn&l[script]=zh-Hans" \
+  "http://localhost:8080/lyrics/1648869428"
 ```
 
 ```json

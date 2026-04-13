@@ -17,9 +17,6 @@ use self::search::{SearchCacheEntry, SearchCacheKey};
 use self::web_token::WebTokenCacheEntry;
 
 const MUSIC_ORIGIN: &str = "https://music.apple.com";
-const DESKTOP_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
-const DEFAULT_ARTIST_INCLUDE: &str = "genres,station";
-const DEFAULT_ARTIST_VIEWS: &str = "top-songs,latest-release,full-albums,singles,featured-playlists,playlists,similar-artists,top-music-videos";
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Artwork {
@@ -73,7 +70,10 @@ pub struct AppleApiClient {
 
 impl AppleApiClient {
     pub fn new(proxy: Option<&str>) -> ApiResult<Self> {
-        let mut builder = Client::builder().user_agent(DESKTOP_USER_AGENT);
+        let mut builder = Client::builder().user_agent(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        );
         if let Some(proxy) = proxy {
             crate::app_info!(
                 "http::apple_api",
@@ -221,13 +221,15 @@ impl AppleApiClient {
         views: Option<&str>,
         limit: Option<usize>,
     ) -> ApiResult<Value> {
-        let mut params = vec![("include", DEFAULT_ARTIST_INCLUDE.to_owned())];
+        let mut params = vec![("include", "genres,station".to_owned())];
         params.push((
             "views",
             views
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .unwrap_or(DEFAULT_ARTIST_VIEWS)
+                .unwrap_or(
+                    "top-songs,latest-release,full-albums,singles,featured-playlists,playlists,similar-artists,top-music-videos",
+                )
                 .to_owned(),
         ));
         if let Some(limit) = limit {
