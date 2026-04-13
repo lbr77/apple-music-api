@@ -26,6 +26,8 @@ use super::{
     SUBSONIC_MUSIC_FOLDER_ID, Search3Query, StreamQuery,
 };
 
+const APPLE_SEARCH_LIMIT_MAX: usize = 50;
+
 pub(super) async fn log_subsonic_request(
     request: Request,
     next: axum::middleware::Next,
@@ -119,14 +121,23 @@ pub(super) async fn search3_handler(
             "query is required",
         ));
     }
+    let requested_artist_count = query.artist_count.unwrap_or(20);
+    let requested_album_count = query.album_count.unwrap_or(20);
+    let requested_song_count = query.song_count.unwrap_or(20);
+    let artist_count = clamp_search_limit(requested_artist_count);
+    let album_count = clamp_search_limit(requested_album_count);
+    let song_count = clamp_search_limit(requested_song_count);
 
     crate::app_info!(
         "http::subsonic",
-        "processing search3 request: query_len={}, artist_count={}, album_count={}, song_count={}",
+        "processing search3 request: query_len={}, requested_artist_count={}, requested_album_count={}, requested_song_count={}, artist_count={}, album_count={}, song_count={}",
         query.query.trim().len(),
-        query.artist_count.unwrap_or(20),
-        query.album_count.unwrap_or(20),
-        query.song_count.unwrap_or(20),
+        requested_artist_count,
+        requested_album_count,
+        requested_song_count,
+        artist_count,
+        album_count,
+        song_count,
     );
     let storefront = context.default_storefront();
     let artist_hits = context
@@ -136,7 +147,7 @@ pub(super) async fn search3_handler(
             language: context.default_language(),
             query: &query.query,
             search_type: "artist",
-            limit: query.artist_count.unwrap_or(20),
+            limit: artist_count,
             offset: query.artist_offset.unwrap_or(0),
         })
         .await
@@ -148,7 +159,7 @@ pub(super) async fn search3_handler(
             language: context.default_language(),
             query: &query.query,
             search_type: "album",
-            limit: query.album_count.unwrap_or(20),
+            limit: album_count,
             offset: query.album_offset.unwrap_or(0),
         })
         .await
@@ -160,7 +171,7 @@ pub(super) async fn search3_handler(
             language: context.default_language(),
             query: &query.query,
             search_type: "song",
-            limit: query.song_count.unwrap_or(20),
+            limit: song_count,
             offset: query.song_offset.unwrap_or(0),
         })
         .await
@@ -196,6 +207,10 @@ pub(super) async fn search3_handler(
             ))
         }
     })
+}
+
+pub(super) fn clamp_search_limit(requested: usize) -> usize {
+    requested.clamp(1, APPLE_SEARCH_LIMIT_MAX)
 }
 
 pub(super) async fn get_artist_handler(

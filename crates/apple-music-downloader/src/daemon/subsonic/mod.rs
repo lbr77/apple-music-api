@@ -146,6 +146,7 @@ mod tests {
     use reqwest::StatusCode as HttpStatusCode;
 
     use super::auth::{parse_auth_query, validate_auth_credentials};
+    use super::handlers::clamp_search_limit;
     use super::render::{escape_xml_attr, subsonic_error_response};
     use super::service::{lyrics_not_found_as_empty, requested_codec};
     use super::{AuthQuery, ResponseFormat};
@@ -227,6 +228,14 @@ mod tests {
         )
         .expect("empty lyrics");
         assert!(lyrics.is_empty());
+    }
+
+    #[test]
+    fn search_limit_clamps_to_apple_supported_window() {
+        assert_eq!(clamp_search_limit(0), 1);
+        assert_eq!(clamp_search_limit(20), 20);
+        assert_eq!(clamp_search_limit(50), 50);
+        assert_eq!(clamp_search_limit(500), 50);
     }
 
     #[test]
