@@ -76,10 +76,10 @@ function handleDialogState(open: boolean) {
 </script>
 
 <template>
-  <section class="flex min-h-screen items-center justify-center bg-white px-4">
-    <Card class="w-full max-w-sm border-neutral-200 shadow-none">
+  <section class="flex min-h-screen items-center justify-center bg-background px-4 py-10">
+    <Card class="w-full max-w-[420px] border-border">
       <CardHeader class="text-center">
-        <CardTitle class="text-xl font-medium">Settings</CardTitle>
+        <CardTitle class="text-[1.375rem] font-semibold">Settings</CardTitle>
         <CardDescription>
           {{ notice.tone === 'destructive' ? notice.description : sessionState === 'logged_in' ? 'Current state is logged in.' : 'Current state is logged out.' }}
         </CardDescription>
@@ -110,7 +110,7 @@ function handleDialogState(open: boolean) {
         </div>
       </CardContent>
 
-      <CardFooter v-if="sessionState === 'logged_out'">
+      <CardFooter v-if="sessionState === 'logged_out'" class="pt-1">
         <Button
           class="w-full"
           :disabled="
@@ -124,7 +124,7 @@ function handleDialogState(open: boolean) {
         </Button>
       </CardFooter>
 
-      <CardFooter v-else-if="sessionState === 'logged_in'" class="pt-0">
+      <CardFooter v-else-if="sessionState === 'logged_in'" class="pt-1">
         <Button
           class="w-full"
           variant="outline"
