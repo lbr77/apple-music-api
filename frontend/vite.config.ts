@@ -5,7 +5,7 @@ import path from 'node:path'
 
 // https://vite.dev/config/
 export default defineConfig({
-  base: '/',
+  base: '/app/',
   plugins: [vue(), tailwindcss()],
   resolve: {
     alias: {
