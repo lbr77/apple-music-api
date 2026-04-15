@@ -164,12 +164,93 @@ pub fn ttml_to_lrc(ttml: &str) -> ApiResult<String> {
 }
 
 fn node_text(node: roxmltree::Node<'_, '_>) -> String {
-    node.descendants()
-        .filter_map(|child| child.text())
-        .collect::<Vec<_>>()
-        .join("")
-        .trim()
-        .to_owned()
+    render_node_text(node).trim().to_owned()
+}
+
+fn render_node_text(node: roxmltree::Node<'_, '_>) -> String {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum PieceKind {
+        DirectText,
+        LeafElement,
+        NestedElement,
+    }
+
+    struct Piece {
+        kind: PieceKind,
+        text: String,
+    }
+
+    let mut pieces = Vec::new();
+    for child in node.children() {
+        if child.is_text() {
+            if let Some(text) = child
+                .text()
+                .filter(|value| value.chars().any(|ch| !ch.is_whitespace()))
+            {
+                pieces.push(Piece {
+                    kind: PieceKind::DirectText,
+                    text: text.to_owned(),
+                });
+            }
+            continue;
+        }
+
+        if !child.is_element() {
+            continue;
+        }
+
+        let text = render_node_text(child);
+        if text.trim().is_empty() {
+            continue;
+        }
+
+        let kind = if child.children().any(|grandchild| grandchild.is_element()) {
+            PieceKind::NestedElement
+        } else {
+            PieceKind::LeafElement
+        };
+        pieces.push(Piece { kind, text });
+    }
+
+    if pieces.is_empty() {
+        return String::new();
+    }
+
+    // Apple syllable TTML can expose the same rendered line through parallel nested branches.
+    // Concatenating every descendant text doubles the line before it is written into the MP4 tag.
+    if pieces
+        .iter()
+        .all(|piece| piece.kind == PieceKind::NestedElement)
+    {
+        let candidate = pieces[0].text.trim();
+        if !candidate.is_empty() && pieces.iter().all(|piece| piece.text.trim() == candidate) {
+            return candidate.to_owned();
+        }
+    }
+
+    let direct_text = pieces
+        .iter()
+        .filter(|piece| piece.kind == PieceKind::DirectText)
+        .map(|piece| piece.text.as_str())
+        .collect::<String>();
+    let has_nested_elements = pieces
+        .iter()
+        .any(|piece| piece.kind == PieceKind::NestedElement);
+    if has_nested_elements
+        && !direct_text.trim().is_empty()
+        && pieces
+            .iter()
+            .filter(|piece| piece.kind == PieceKind::NestedElement)
+            .map(|piece| piece.text.trim())
+            .all(|piece| piece == direct_text.trim())
+        && pieces
+            .iter()
+            .all(|piece| piece.kind != PieceKind::LeafElement)
+    {
+        return direct_text.trim().to_owned();
+    }
+
+    pieces.into_iter().map(|piece| piece.text).collect()
 }
 
 fn parse_ttml_timestamp(value: &str) -> ApiResult<(u32, u32, u32)> {
@@ -215,7 +296,7 @@ fn parse_ttml_timestamp(value: &str) -> ApiResult<(u32, u32, u32)> {
 mod tests {
     use std::env;
 
-    use super::{AppleApiClient, lyrics_endpoints, lyrics_request_url};
+    use super::{AppleApiClient, lyrics_endpoints, lyrics_request_url, ttml_to_lrc};
 
     #[test]
     fn lyrics_request_url_preserves_structured_language_params() {
@@ -245,6 +326,51 @@ mod tests {
     fn lyrics_endpoints_default_to_standard_lyrics() {
         assert_eq!(lyrics_endpoints(None), ["lyrics", "syllable-lyrics"]);
         assert_eq!(lyrics_endpoints(Some("ja")), ["lyrics", "syllable-lyrics"]);
+    }
+
+    #[test]
+    fn ttml_to_lrc_concatenates_normal_syllable_spans() {
+        let lyrics = ttml_to_lrc(
+            r#"
+            <tt xmlns="http://www.w3.org/ns/ttml">
+              <body>
+                <div>
+                  <p begin="00:20.02">
+                    <span>摇曳海中</span><span>扁舟 </span><span>或穿越丛林的风</span>
+                  </p>
+                </div>
+              </body>
+            </tt>
+            "#,
+        )
+        .expect("ttml should parse");
+
+        assert_eq!(lyrics, "[00:20.02]摇曳海中扁舟 或穿越丛林的风");
+    }
+
+    #[test]
+    fn ttml_to_lrc_ignores_duplicate_nested_branches() {
+        let lyrics = ttml_to_lrc(
+            r#"
+            <tt xmlns="http://www.w3.org/ns/ttml">
+              <body>
+                <div>
+                  <p begin="00:20.02">
+                    <span>
+                      <span>摇曳海中</span><span>扁舟 </span><span>或穿越丛林的风</span>
+                    </span>
+                    <span>
+                      <span>摇曳海中</span><span>扁舟 </span><span>或穿越丛林的风</span>
+                    </span>
+                  </p>
+                </div>
+              </body>
+            </tt>
+            "#,
+        )
+        .expect("ttml should parse");
+
+        assert_eq!(lyrics, "[00:20.02]摇曳海中扁舟 或穿越丛林的风");
     }
 
     #[tokio::test]
