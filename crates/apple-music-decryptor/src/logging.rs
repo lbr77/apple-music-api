@@ -1,9 +1,17 @@
+use std::env;
 use std::fmt;
+use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+static DEBUG_ENABLED: LazyLock<bool> = LazyLock::new(|| {
+    env::var("WRAPPER_LOG")
+        .ok()
+        .map(|value| value.to_ascii_lowercase())
+        .is_some_and(|value| value.contains("debug"))
+});
+
 pub fn emit(level: &str, target: &str, args: fmt::Arguments<'_>) {
-    let effective_level = effective_level(level, target);
-    if !should_emit(effective_level, target) {
+    if !should_emit(level) {
         return;
     }
 
@@ -13,7 +21,7 @@ pub fn emit(level: &str, target: &str, args: fmt::Arguments<'_>) {
     let thread = std::thread::current();
     let thread_name = thread.name().unwrap_or("unnamed");
     eprintln!(
-        "[{:>10}.{:03}] [{effective_level:<5}] [{thread_name}] [{target}] {args}",
+        "[{:>10}.{:03}] [{level:<5}] [{thread_name}] [{target}] {args}",
         elapsed.as_secs(),
         elapsed.subsec_millis(),
     );
@@ -37,20 +45,8 @@ fn android_log_level(prio: i32) -> &'static str {
     }
 }
 
-fn effective_level<'a>(level: &'a str, target: &str) -> &'a str {
-    if target.starts_with("ffi::") && level == "INFO" {
-        "DEBUG"
-    } else {
-        level
-    }
-}
-
-fn should_emit(level: &str, target: &str) -> bool {
-    match level {
-        "DEBUG" => target.starts_with("ffi::"),
-        "INFO" | "WARN" | "ERROR" => true,
-        _ => false,
-    }
+fn should_emit(level: &str) -> bool {
+    matches!(level, "INFO" | "WARN" | "ERROR") || (*DEBUG_ENABLED && level == "DEBUG")
 }
 
 #[macro_export]

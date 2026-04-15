@@ -715,7 +715,7 @@ impl NativeSession {
         context: &mut PContextHandle,
         mut sample: Vec<u8>,
     ) -> AppResult<Vec<u8>> {
-        crate::app_info!(
+        crate::app_debug!(
             "ffi::session",
             "decrypting sample: kd_context_slot={:p}, kd_context={:p}, bytes={}",
             context.kd_context_slot,
@@ -736,7 +736,7 @@ impl NativeSession {
                 "decrypt returned non-zero status {status}"
             )));
         }
-        crate::app_info!(
+        crate::app_debug!(
             "ffi::session",
             "decrypt sample completed: kd_context_slot={:p}, kd_context={:p}, bytes={}",
             context.kd_context_slot,

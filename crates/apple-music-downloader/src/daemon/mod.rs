@@ -20,8 +20,7 @@ pub async fn run_daemon_server(
     platform: Arc<NativePlatform>,
     state: Arc<AppState>,
 ) -> AppResult<()> {
-    std::fs::create_dir_all(config.cache_dir.join("lyrics"))?;
-    std::fs::create_dir_all(config.cache_dir.join("albums"))?;
+    clear_startup_cache(&config)?;
 
     let context = Arc::new(DaemonContext::new(config.clone(), platform, state)?);
     let app = Router::new()
@@ -41,5 +40,19 @@ pub async fn run_daemon_server(
     axum::serve(listener, app)
         .await
         .map_err(|error| AppError::Message(format!("daemon server failed: {error}")))?;
+    Ok(())
+}
+
+fn clear_startup_cache(config: &AppConfig) -> AppResult<()> {
+    for (label, path) in [
+        ("lyrics cache", config.cache_dir.join("lyrics")),
+        ("album cache", config.cache_dir.join("albums")),
+    ] {
+        if path.exists() {
+            std::fs::remove_dir_all(&path)?;
+            crate::app_info!("daemon", "startup cache cleared: {}={}", label, path.display());
+        }
+        std::fs::create_dir_all(&path)?;
+    }
     Ok(())
 }
