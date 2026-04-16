@@ -10,6 +10,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::middleware;
 use axum::routing::get;
+use serde::de::Deserializer;
 use serde::Deserialize;
 
 use super::DaemonContext;
@@ -76,6 +77,7 @@ pub(super) struct CoverArtQuery {
     #[serde(flatten)]
     auth: AuthQuery,
     id: String,
+    #[serde(default, deserialize_with = "deserialize_optional_u32_lossy")]
     size: Option<u32>,
 }
 
@@ -140,6 +142,14 @@ pub(super) fn router(context: Arc<DaemonContext>) -> Router<Arc<DaemonContext>> 
         ))
 }
 
+fn deserialize_optional_u32_lossy<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    Ok(raw.and_then(|value| value.trim().parse::<u32>().ok()))
+}
+
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
@@ -149,7 +159,7 @@ mod tests {
     use super::handlers::clamp_search_limit;
     use super::render::{escape_xml_attr, subsonic_error_response};
     use super::service::{lyrics_not_found_as_empty, requested_codec};
-    use super::{AuthQuery, ResponseFormat};
+    use super::{AuthQuery, CoverArtQuery, ResponseFormat};
     use crate::error::AppError;
 
     #[test]
@@ -194,6 +204,17 @@ mod tests {
             },
         )
         .expect("token auth");
+    }
+
+    #[test]
+    fn cover_art_query_ignores_non_numeric_size_values() {
+        let query: CoverArtQuery = serde_urlencoded::from_str(
+            "u=wrapper&v=1.16.1&c=test&p=secret&id=123&size=%7Bw%7D",
+        )
+        .expect("parse cover art query");
+
+        assert_eq!(query.id, "123");
+        assert_eq!(query.size, None);
     }
 
     #[test]

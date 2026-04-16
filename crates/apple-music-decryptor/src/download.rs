@@ -5,6 +5,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output};
 use std::sync::LazyLock;
+use std::time::SystemTime;
 
 use mp4ameta::{Img, Tag};
 use regex::Regex;
@@ -103,16 +104,41 @@ pub fn download_playback(
     session: std::sync::Arc<SessionRuntime>,
     request: PlaybackRequest,
 ) -> AppResult<PlaybackOutput> {
+    match download_playback_once(&config, session.clone(), request.clone()) {
+        Ok(output) => Ok(output),
+        Err(error) if is_no_space_error(&error) => {
+            crate::app_warn!(
+                "download",
+                "disk full during playback download: song_id={}, album_id={}; starting cache cleanup",
+                request.metadata.song_id,
+                request.metadata.album_id,
+            );
+            cleanup_disk_pressure(
+                &config.cache_dir,
+                &request.metadata.album_id,
+                &request.metadata.song_id,
+            );
+            download_playback_once(&config, session, request)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn download_playback_once(
+    config: &DownloadConfig,
+    session: std::sync::Arc<SessionRuntime>,
+    request: PlaybackRequest,
+) -> AppResult<PlaybackOutput> {
     let track = request.metadata;
     let song_id = track.song_id.clone();
-    let client = build_client(&config)?;
+    let client = build_client(config)?;
     let album_dir = config.cache_dir.join("albums").join(&track.album_id);
     fs::create_dir_all(&album_dir)?;
     let final_path = album_dir.join(format!("{song_id}.m4a"));
     let relative_path = format!("cache/albums/{}/{}.m4a", track.album_id, song_id);
 
     if final_path.is_file() {
-        return Ok(PlaybackOutput {
+        let output = PlaybackOutput {
             relative_path,
             size: final_path.metadata()?.len(),
             artist: track.artist,
@@ -121,8 +147,25 @@ pub fn download_playback(
             album: track.album,
             title: track.title,
             codec: detect_codec_label(&final_path)?,
-        });
+        };
+        crate::app_info!(
+            "download",
+            "playback cache hit: song_id={}, album_id={}, codec={}, bytes={}",
+            song_id,
+            output.album_id,
+            output.codec,
+            output.size,
+        );
+        return Ok(output);
     }
+
+    crate::app_info!(
+        "download",
+        "playback download started: song_id={}, album_id={}, requested_codec={}",
+        song_id,
+        track.album_id,
+        request.requested_codec.as_deref().unwrap_or("alac"),
+    );
 
     let master_url = session.resolve_m3u8_url(song_id.parse::<u64>().map_err(|error| {
         AppError::Protocol(format!("song id is not a valid adam id: {error}"))
@@ -239,7 +282,7 @@ pub fn download_playback(
         }
     }
 
-    Ok(PlaybackOutput {
+    let output = PlaybackOutput {
         relative_path,
         size: final_path.metadata()?.len(),
         artist: track.artist,
@@ -248,7 +291,132 @@ pub fn download_playback(
         album: track.album,
         title: track.title,
         codec: variant.codec_label(),
-    })
+    };
+    crate::app_info!(
+        "download",
+        "playback download completed: song_id={}, album_id={}, codec={}, bytes={}",
+        song_id,
+        output.album_id,
+        output.codec,
+        output.size,
+    );
+    Ok(output)
+}
+
+fn is_no_space_error(error: &AppError) -> bool {
+    match error {
+        AppError::Io(io_error) => io_error.raw_os_error() == Some(28),
+        AppError::Message(message) | AppError::Command(message) | AppError::Protocol(message) => {
+            message.to_ascii_lowercase().contains("no space left on device")
+        }
+        _ => false,
+    }
+}
+
+fn cleanup_disk_pressure(cache_dir: &Path, current_album_id: &str, current_song_id: &str) {
+    let lyrics_dir = cache_dir.join("lyrics");
+    let albums_dir = cache_dir.join("albums");
+    cleanup_dir_contents("download", "lyrics cache", &lyrics_dir);
+    cleanup_song_temporary_files(&albums_dir.join(current_album_id), current_song_id);
+
+    let Ok(entries) = fs::read_dir(&albums_dir) else {
+        crate::app_warn!(
+            "download",
+            "disk cleanup skipped: failed to read album cache directory {}",
+            albums_dir.display(),
+        );
+        return;
+    };
+
+    let mut removable = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .filter(|entry| entry.file_name() != current_album_id)
+        .filter_map(|entry| {
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            Some((modified, entry.path()))
+        })
+        .collect::<Vec<_>>();
+    removable.sort_by_key(|(modified, _)| *modified);
+
+    let mut removed = 0usize;
+    for (_, path) in removable {
+        match fs::remove_dir_all(&path) {
+            Ok(()) => {
+                removed += 1;
+                crate::app_info!(
+                    "download",
+                    "disk cleanup removed cached album: {}",
+                    path.display(),
+                );
+            }
+            Err(error) => {
+                crate::app_warn!(
+                    "download",
+                    "disk cleanup failed to remove {}: {}",
+                    path.display(),
+                    error,
+                );
+            }
+        }
+    }
+
+    crate::app_info!(
+        "download",
+        "disk cleanup completed: removed_cached_albums={}",
+        removed,
+    );
+}
+
+fn cleanup_dir_contents(target: &str, label: &str, path: &Path) {
+    if !path.exists() {
+        return;
+    }
+
+    if let Err(error) = fs::remove_dir_all(path) {
+        crate::app_warn!(target, "failed to remove {} {}: {}", label, path.display(), error);
+        return;
+    }
+    if let Err(error) = fs::create_dir_all(path) {
+        crate::app_warn!(target, "failed to recreate {} {}: {}", label, path.display(), error);
+        return;
+    }
+    crate::app_info!(target, "cleared {}: {}", label, path.display());
+}
+
+fn cleanup_song_temporary_files(album_dir: &Path, song_id: &str) {
+    let Ok(entries) = fs::read_dir(album_dir) else {
+        return;
+    };
+
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let keep_final = name == format!("{song_id}.m4a");
+        let owned_by_song = name == song_id || name.starts_with(&format!("{song_id}_"));
+        if keep_final || !owned_by_song {
+            continue;
+        }
+        if let Err(error) = fs::remove_file(&path) {
+            crate::app_warn!(
+                "download",
+                "disk cleanup failed to remove temporary file {}: {}",
+                path.display(),
+                error,
+            );
+        } else {
+            crate::app_info!(
+                "download",
+                "disk cleanup removed temporary file: {}",
+                path.display(),
+            );
+        }
+    }
 }
 
 fn build_client(config: &DownloadConfig) -> AppResult<Client> {
